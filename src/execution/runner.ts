@@ -54,7 +54,13 @@ export async function runScenario(
   const env = deps.env ?? process.env;
   const hooks = deps.hooks ?? {};
   const ctx: VariableContext = { variables: structuredClone(scenario.variables ?? {}), env };
-  const hookCtx: HookContext = { scenarioId: scenario.id, variables: ctx.variables, env };
+  const hookCtx: HookContext = {
+    scenarioId: scenario.id,
+    variables: ctx.variables,
+    env,
+    legacyBaseUrl: config.legacy_base_url,
+    newBaseUrl: config.new_base_url,
+  };
 
   const finish = (steps: StepResult[], error: string | undefined): ScenarioResult => ({
     scenarioId: scenario.id,

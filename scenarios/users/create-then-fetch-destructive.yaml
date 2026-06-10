@@ -1,0 +1,52 @@
+version: 1
+id: users.create-then-fetch-destructive
+name: Create then fetch a user (destructive)
+description: >
+  A multi-step write flow: a setup hook generates a unique payload, the user is
+  created, the created id is extracted, and the resource is read back and
+  compared on a subset of fields. A cleanup hook deletes the user — it runs even
+  if a step fails. Marked destructive, so it only runs with explicit opt-in.
+service: user-service
+tags: [write, read, regression, destructive]
+mode: compare_live
+safety:
+  destructive: true
+  allowedEnvironments: [local, ci, staging]
+contract: "../../contracts/user-service.contract.yaml#create-user"
+setup:
+  hooks:
+    - name: generateUserPayload
+      assign:
+        userEmail: email
+steps:
+  - id: create-user
+    request:
+      method: POST
+      path: /users
+      headers:
+        content-type: application/json
+      body:
+        email: "{{ variables.userEmail }}"
+        name: Grace Hopper
+    extract:
+      userId:
+        from: new.body
+        path: $.id
+    compare:
+      strategy: json_semantic
+      status: same
+  - id: get-created-user
+    request:
+      method: GET
+      path: /users/{{ variables.userId }}
+    compare:
+      strategy: subset
+      body:
+        require_matching_paths:
+          - $.name
+          - $.status
+cleanup:
+  hooks:
+    - name: deleteUser
+      args:
+        userId: "{{ variables.userId }}"

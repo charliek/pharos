@@ -1,0 +1,12 @@
+{
+  "scenario_dir": "./scenarios",
+  "contract_dir": "./contracts",
+  "fixture_dir": "./fixtures/recordings",
+  "report_dir": "./reports",
+  "hooks_module": "./hooks/index.ts",
+  "redaction": {
+    "headers": ["authorization", "cookie", "set-cookie", "x-api-key"],
+    "json_paths": ["$.email", "$.items[*].email"],
+    "query_params": ["access_token"]
+  }
+}

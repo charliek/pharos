@@ -54,7 +54,14 @@
     }
   },
   "files": {
-    "includes": ["src/**/*.ts", "tests/**/*.ts", "hooks/**/*.ts", "*.ts", "*.json"],
+    "includes": [
+      "src/**/*.ts",
+      "tests/**/*.ts",
+      "hooks/**/*.ts",
+      "examples/**/*.ts",
+      "*.ts",
+      "*.json"
+    ],
     "ignoreUnknown": true
   },
   "overrides": [

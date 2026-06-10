@@ -1,0 +1,16 @@
+version: 1
+id: users.get-user-not-found
+name: Get a missing user returns 404
+description: Both services return the same 404 error envelope for an unknown user.
+service: user-service
+tags: [read, regression, migration-ready]
+mode: compare_live
+contract: "../../contracts/user-service.contract.yaml#get-user"
+steps:
+  - id: get-missing
+    request:
+      method: GET
+      path: /users/does-not-exist
+    compare:
+      strategy: json_semantic
+      status: same

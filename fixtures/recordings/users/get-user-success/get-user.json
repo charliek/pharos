@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "scenarioId": "users.record-existing-user",
+  "stepId": "get-user",
+  "recordedAt": "2024-01-01T00:00:00.000Z",
+  "environment": "local",
+  "request": {
+    "method": "GET",
+    "path": "/users/user-123"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "bodyText": "{\"id\":\"user-123\",\"name\":\"Ada Lovelace\",\"email\":\"***REDACTED***\",\"status\":\"ACTIVE\",\"createdAt\":\"2024-01-01T12:00:00.000Z\",\"metadata\":{\"requestId\":\"recorded-req-1\",\"generatedAt\":\"2024-01-01T00:00:00.000Z\"}}",
+    "bodyJson": {
+      "id": "user-123",
+      "name": "Ada Lovelace",
+      "email": "***REDACTED***",
+      "status": "ACTIVE",
+      "createdAt": "2024-01-01T12:00:00.000Z",
+      "metadata": {
+        "requestId": "recorded-req-1",
+        "generatedAt": "2024-01-01T00:00:00.000Z"
+      }
+    },
+    "durationMs": 4
+  }
+}

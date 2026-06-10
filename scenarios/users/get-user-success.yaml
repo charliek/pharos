@@ -1,0 +1,22 @@
+version: 1
+id: users.get-user-success
+name: Get an existing user
+description: >
+  The new service returns the same user representation as legacy for an existing
+  user. Per-request metadata (request id, generated-at) is ignored by the
+  contract, so only the meaningful fields are compared.
+service: user-service
+tags: [read, smoke, migration-ready]
+mode: compare_live
+contract: "../../contracts/user-service.contract.yaml#get-user"
+variables:
+  userId: user-123
+steps:
+  - id: get-user
+    name: Fetch user by id
+    request:
+      method: GET
+      path: /users/{{ variables.userId }}
+    compare:
+      strategy: json_semantic
+      status: same

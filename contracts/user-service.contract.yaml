@@ -1,0 +1,65 @@
+# Behavioral contract for the example user-service migration.
+#
+# Portable, unchanged, to Limen: it owns *what to compare and how* — never
+# operational concerns. Every normalization rule is a deliberate exception to the
+# default posture of "compare everything".
+version: 1
+service: user-service
+description: >
+  Example behavioral contract refined by Pharos and consumed by Limen. The
+  user-service emits per-request metadata (request/trace ids, a "now" timestamp)
+  that is incidental and must not count as a difference.
+
+defaults:
+  compare_status: true
+  compare_body: true
+  compare_headers: []
+  json:
+    ignore_paths:
+      - "$.metadata.requestId" # per-request, non-deterministic
+      - "$.metadata.generatedAt" # server "now" timestamp
+    redact_paths:
+      - "$.email" # PII — never appears in a diff, report, or artifact
+    normalize_timestamps:
+      - path: "$.createdAt"
+        precision: seconds # tolerate millis-vs-seconds formatting drift
+    enum_aliases:
+      - path: "$.status"
+        aliases: { ACTIVE: enabled, INACTIVE: disabled }
+
+routes:
+  - id: get-user
+    match:
+      methods: ["GET"]
+      path_template: "/users/{id}"
+    expectations:
+      typical_status: 200
+    tags: [read, migration-ready]
+
+  - id: list-users
+    match:
+      methods: ["GET"]
+      path_template: "/users"
+    comparison:
+      json:
+        sort_arrays:
+          - path: "$.items"
+            key: "id" # order is incidental; sort by stable id
+        normalize_timestamps:
+          - path: "$.items[*].createdAt"
+            precision: seconds
+        redact_paths:
+          - "$.items[*].email"
+    tags: [read, migration-ready]
+
+  - id: create-user
+    match:
+      methods: ["POST"]
+      path_template: "/users"
+    comparison:
+      json:
+        ignore_paths:
+          - "$.id" # server-generated; the scenario does not pin it
+    expectations:
+      typical_status: 201
+    tags: [write, migration-ready]

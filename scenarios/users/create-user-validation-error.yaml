@@ -1,0 +1,22 @@
+version: 1
+id: users.create-user-validation-error
+name: Create user with a missing field returns a validation error
+description: >
+  Posting a user without an email yields the same 422 validation envelope from
+  both services. Error contracts matter to clients, so the shape is asserted.
+service: user-service
+tags: [write, regression, migration-ready]
+mode: compare_live
+contract: "../../contracts/user-service.contract.yaml#create-user"
+steps:
+  - id: create-invalid
+    request:
+      method: POST
+      path: /users
+      headers:
+        content-type: application/json
+      body:
+        name: No Email Provided
+    compare:
+      strategy: json_semantic
+      status: same

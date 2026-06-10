@@ -18,6 +18,7 @@
   "scripts": {
     "ftest": "bun run src/cli/index.ts",
     "pharos": "bun run src/cli/index.ts",
+    "example:serve": "bun run examples/serve.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

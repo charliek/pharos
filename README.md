@@ -47,9 +47,12 @@ on each other.
 
 ## Status
 
-Pharos is built phase by phase against its [specification](docs/pharos_spec.md)
-(Section 14). See `CLAUDE.md` for conventions and the commit history for the
-current phase.
+Pharos implements the full MVP from the [specification](docs/pharos_spec.md)
+(Section 14): scenario and contract loading and validation, the HTTP client, the
+comparison and normalization engine, all five comparison strategies, the four
+execution modes, hooks, recording and replay, the console/JSON/JUnit reporters,
+CLI filtering, exit codes, and a runnable example service with the seven required
+scenarios. See `CLAUDE.md` for conventions.
 
 ## Requirements
 
@@ -69,10 +72,25 @@ Run the CLI through the `ftest` script:
 
 ```bash
 bun run ftest -- --help
-bun run ftest -- validate                 # validate scenarios + contracts
-bun run ftest -- check-contract contracts/example-service.contract.yaml
-bun run ftest -- run --scenario users.get-user-success
+bun run ftest -- validate                 # validate the example scenarios + contract
+bun run ftest -- check-contract contracts/user-service.contract.yaml
 ```
+
+### Try the example end to end
+
+The repo ships a runnable example — a mock `user-service`, a contract, the seven
+required scenarios, hooks, and a recording. Bring up two mock instances and run:
+
+```bash
+bun run example:serve &                    # legacy on :3001, new on :3002
+LEGACY_BASE_URL=http://127.0.0.1:3001 \
+NEW_BASE_URL=http://127.0.0.1:3002 \
+ALLOW_DESTRUCTIVE_TESTS=true \
+  bun run ftest -- run
+```
+
+All seven scenarios pass; without `ALLOW_DESTRUCTIVE_TESTS` the destructive flow
+is skipped. Reports land in `reports/` (`report.json`, `junit.xml`).
 
 ## Development
 

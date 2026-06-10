@@ -1,0 +1,21 @@
+version: 1
+id: users.new-only-healthcheck
+name: New service healthcheck
+description: >
+  A new-only assertion: the new service exposes a healthcheck with status "ok".
+  There is no legacy equivalent, so explicit expectations are asserted directly.
+service: user-service
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: health
+    request:
+      method: GET
+      path: /health
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+        body:
+          json_paths:
+            $.status: ok

@@ -1,0 +1,21 @@
+version: 1
+id: users.replay-get-user-recording
+name: Replay a recorded user against the new service
+description: >
+  Replays a captured legacy response for user-123 and compares it to the new
+  service's live response, normalized by the same contract. Useful when legacy
+  is unavailable or deterministic replay is wanted.
+service: user-service
+tags: [read, regression]
+mode: replay_against_recording
+contract: "../../contracts/user-service.contract.yaml#get-user"
+steps:
+  - id: get-user
+    recording:
+      fixture: users/get-user-success/get-user.json
+    request:
+      method: GET
+      path: /users/user-123
+    compare:
+      strategy: json_semantic
+      status: same

@@ -17,6 +17,9 @@ export interface HookContext {
   /** The shared, mutable variable store — hooks may read and write it directly. */
   variables: Record<string, unknown>;
   env: NodeJS.ProcessEnv;
+  /** Resolved upstream base URLs, so hooks can talk to the services for setup/cleanup. */
+  legacyBaseUrl?: string;
+  newBaseUrl?: string;
   /** Present for step-level (before/after) hooks. */
   stepId?: string;
 }
