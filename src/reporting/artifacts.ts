@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { REDACTED, redactHeaders, redactJsonValue, redactUrl } from '../comparison/redaction';
+import { redactHeaders, redactJsonValue, redactQuery, redactUrl } from '../comparison/redaction';
 import type { RedactionTargets } from '../config/config';
 import type { HttpRequestSpec, HttpResponseRecord } from '../execution/http-client';
 
@@ -15,16 +15,6 @@ export interface ArtifactInputs {
   legacy?: HttpResponseRecord;
   candidate?: HttpResponseRecord;
   diffText?: string;
-}
-
-function redactQuery(query: HttpRequestSpec['query'], params: string[]): HttpRequestSpec['query'] {
-  if (!query) return undefined;
-  const target = new Set(params.map((p) => p.toLowerCase()));
-  const out: Record<string, string | number | boolean | null> = {};
-  for (const [key, value] of Object.entries(query)) {
-    out[key] = target.has(key.toLowerCase()) ? REDACTED : value;
-  }
-  return out;
 }
 
 // Only JSON object/array bodies can be path-redacted; scalars and non-JSON text

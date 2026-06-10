@@ -3,8 +3,10 @@ import type { ComparisonResult } from '../comparison/result';
 import type { ComparisonRules } from '../comparison/rules';
 import type { PharosConfig } from '../config/config';
 import { inlineComparisonRules } from '../contract/merge';
+import { ValidationError } from '../errors';
 import { writeFailureArtifacts } from '../reporting/artifacts';
 import type { Scenario, ScenarioStep } from '../scenarios/schema';
+import { buildRecording, loadRecording, recordingResponse, writeRecording } from './fixtures';
 import type {
   HttpClientOptions,
   HttpRequestSpec,
@@ -29,6 +31,10 @@ export interface StepResult {
   /** Execution error (variable resolution, network) — distinct from a behavioral mismatch. */
   error?: string;
   artifactDir?: string;
+  /** Path written for a legacy_record step (when recording is enabled). */
+  recordingPath?: string;
+  /** True for a legacy_record step that did not write because recording is disabled. */
+  recordingSkipped?: boolean;
 }
 
 export type SendFn = typeof sendRequest;
@@ -37,6 +43,8 @@ export interface StepRunnerDeps {
   send: SendFn;
   /** Custom comparators by name (the hook registry, wired in the hooks phase). */
   comparators?: Record<string, CustomComparator>;
+  /** Whether legacy_record steps may write recordings (record command / opt-in). */
+  recordingEnabled?: boolean;
 }
 
 /**
@@ -117,6 +125,70 @@ function executionFailure(
   return { stepId: step.id, name: step.name, pass: false, error: message, legacy, candidate };
 }
 
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Apply a step's extractions into the shared variable store; returns a failure result on error. */
+function applyExtraction(
+  step: ScenarioStep,
+  ctx: VariableContext,
+  legacy: HttpResponseRecord | undefined,
+  candidate: HttpResponseRecord | undefined,
+): StepResult | undefined {
+  if (!step.extract) return undefined;
+  try {
+    for (const [name, rule] of Object.entries(step.extract)) {
+      ctx.variables[name] = extractValue(rule, { legacy, candidate });
+    }
+  } catch (error) {
+    if (error instanceof VariableError) {
+      return executionFailure(step, `step '${step.id}': ${error.message}`, legacy, candidate);
+    }
+    throw error;
+  }
+  return undefined;
+}
+
+/** Record a legacy interaction to a fixture (legacy_record mode); never compares. */
+async function runRecordStep(
+  scenario: Scenario,
+  step: ScenarioStep,
+  ctx: VariableContext,
+  config: PharosConfig,
+  spec: HttpRequestSpec,
+  deps: StepRunnerDeps,
+): Promise<StepResult> {
+  const legacy = await deps.send(clientOptions('legacy', config), spec);
+  if (legacy.error) {
+    return executionFailure(step, `legacy request failed: ${legacy.error.message}`, legacy);
+  }
+  const extractionError = applyExtraction(step, ctx, legacy, undefined);
+  if (extractionError) return extractionError;
+  if (!step.recording) {
+    return executionFailure(
+      step,
+      `step '${step.id}': legacy_record requires a recording fixture`,
+      legacy,
+    );
+  }
+  if (!deps.recordingEnabled) {
+    return { stepId: step.id, name: step.name, pass: true, legacy, recordingSkipped: true };
+  }
+  const recording = buildRecording({
+    scenarioId: scenario.id,
+    stepId: step.id,
+    recordedAt: new Date().toISOString(),
+    environment: config.output_mode,
+    request: spec,
+    response: legacy,
+    safeHeaders: step.recording.safe_headers ?? [],
+    redaction: config.redaction,
+  });
+  const recordingPath = writeRecording(config.fixture_dir, step.recording.fixture, recording);
+  return { stepId: step.id, name: step.name, pass: true, legacy, recordingPath };
+}
+
 /** Execute one scenario step end to end (spec Section 3.3). */
 export async function runStep(
   scenario: Scenario,
@@ -135,22 +207,36 @@ export async function runStep(
     throw error;
   }
 
+  // Recording mode captures the legacy interaction and never compares.
+  if (scenario.mode === 'legacy_record') {
+    return runRecordStep(scenario, step, ctx, config, spec, deps);
+  }
+
   let legacy: HttpResponseRecord | undefined;
   let candidate: HttpResponseRecord | undefined;
-  switch (scenario.mode) {
-    case 'compare_live':
-      // Independent reads against the shared store — issue them concurrently.
-      [legacy, candidate] = await Promise.all([
-        deps.send(clientOptions('legacy', config), spec),
-        deps.send(clientOptions('new', config), spec),
-      ]);
-      break;
-    case 'new_only_assert':
-      candidate = await deps.send(clientOptions('new', config), spec);
-      break;
-    default:
-      // legacy_record / replay_against_recording are added in the recording phase.
-      return executionFailure(step, `mode '${scenario.mode}' is not yet executable`);
+  if (scenario.mode === 'replay_against_recording') {
+    if (!step.recording) {
+      return executionFailure(step, `step '${step.id}': replay requires a recording fixture`);
+    }
+    try {
+      legacy = recordingResponse(loadRecording(config.fixture_dir, step.recording.fixture));
+    } catch (error) {
+      const detail = error instanceof ValidationError ? error.issues[0]?.message : messageOf(error);
+      return executionFailure(step, `step '${step.id}': ${detail ?? messageOf(error)}`);
+    }
+    // Send the scenario's request (freshly variable-substituted, so it carries
+    // current auth); the recording supplies the legacy *response* to compare
+    // against. The recorded request is redacted and so is not replayed.
+    candidate = await deps.send(clientOptions('new', config), spec);
+  } else if (scenario.mode === 'compare_live') {
+    // Independent reads against the shared store — issue them concurrently.
+    [legacy, candidate] = await Promise.all([
+      deps.send(clientOptions('legacy', config), spec),
+      deps.send(clientOptions('new', config), spec),
+    ]);
+  } else {
+    // new_only_assert
+    candidate = await deps.send(clientOptions('new', config), spec);
   }
 
   if (candidate?.error)
@@ -169,17 +255,8 @@ export async function runStep(
     );
 
   // Extraction runs before comparison and feeds later steps (spec Section 4.6).
-  if (step.extract) {
-    try {
-      for (const [name, rule] of Object.entries(step.extract)) {
-        ctx.variables[name] = extractValue(rule, { legacy, candidate });
-      }
-    } catch (error) {
-      if (error instanceof VariableError)
-        return executionFailure(step, `step '${step.id}': ${error.message}`, legacy, candidate);
-      throw error;
-    }
-  }
+  const extractionError = applyExtraction(step, ctx, legacy, candidate);
+  if (extractionError) return extractionError;
 
   if (!candidate) {
     return executionFailure(step, `step '${step.id}': no response available to compare`, legacy);

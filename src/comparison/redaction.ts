@@ -55,6 +55,22 @@ export function redactUrl(url: string, sensitiveParams: string[]): string {
   return isRelative ? `${parsed.pathname}${parsed.search}${parsed.hash}` : parsed.toString();
 }
 
+export type QueryParams = Record<string, string | number | boolean | null>;
+
+/** Mask the values of configured query parameters (case-insensitive names). */
+export function redactQuery(
+  query: QueryParams | undefined,
+  sensitiveParams: string[],
+): QueryParams | undefined {
+  if (!query || sensitiveParams.length === 0) return query;
+  const target = lowerSet(sensitiveParams);
+  const out: QueryParams = {};
+  for (const [key, value] of Object.entries(query)) {
+    out[key] = target.has(key.toLowerCase()) ? REDACTED : value;
+  }
+  return out;
+}
+
 /**
  * Mask the values of header mismatches whose header name is configured sensitive.
  * A defensive output-safety pass over comparison results so that even a

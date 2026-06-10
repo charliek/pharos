@@ -1,0 +1,178 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, resolve, sep } from 'node:path';
+import { z } from 'zod';
+import { redactJsonValue, redactQuery, redactUrl } from '../comparison/redaction';
+import type { RedactionTargets } from '../config/config';
+import { readDocumentFile } from '../document';
+import { ValidationError, validateWithSchema } from '../errors';
+import type { HttpRequestSpec, HttpResponseRecord } from './http-client';
+
+/**
+ * Recording fixtures (spec Section 10). A recording captures a legacy
+ * interaction as JSON for later replay against the new service. Recordings are
+ * redacted before being written — only `safe_headers` are persisted and
+ * configured secret JSON paths are masked — so no secret reaches a fixture.
+ */
+
+const recordingRequestSchema = z
+  .object({
+    method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+    path: z.string(),
+    query: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+    headers: z.record(z.string()).optional(),
+    body: z.unknown().optional(),
+    timeoutMs: z.number().optional(),
+  })
+  .strict();
+
+const recordingResponseSchema = z
+  .object({
+    status: z.number(),
+    headers: z.record(z.string()),
+    bodyText: z.string(),
+    bodyJson: z.unknown().optional(),
+    durationMs: z.number(),
+    error: z.object({ type: z.string(), message: z.string() }).optional(),
+  })
+  .strict();
+
+export const recordingSchema = z
+  .object({
+    version: z.literal(1),
+    scenarioId: z.string(),
+    stepId: z.string(),
+    recordedAt: z.string(),
+    environment: z.string().optional(),
+    request: recordingRequestSchema,
+    response: recordingResponseSchema,
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export type Recording = z.infer<typeof recordingSchema>;
+
+export interface BuildRecordingParams {
+  scenarioId: string;
+  stepId: string;
+  recordedAt: string;
+  environment?: string;
+  request: HttpRequestSpec;
+  response: HttpResponseRecord;
+  /** Header names allowed into the recording; all others are dropped. */
+  safeHeaders: string[];
+  redaction: RedactionTargets;
+}
+
+function keepSafeHeaders(
+  headers: Record<string, string> | undefined,
+  safe: Set<string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (safe.has(name.toLowerCase())) out[name] = value;
+  }
+  return out;
+}
+
+// Only JSON object/array bodies can be path-redacted; scalars and non-JSON text
+// are not persisted (replaced with a note) so an unredactable secret never
+// reaches a fixture. Replay therefore covers JSON object/array bodies.
+const NON_RECORDABLE_BODY =
+  '[non-JSON or scalar body omitted to avoid leaking unredactable content]';
+
+function recordableBody(body: unknown, paths: string[]): unknown {
+  if (body === undefined) return undefined;
+  if (typeof body === 'object' && body !== null) return redactJsonValue(body, paths);
+  return NON_RECORDABLE_BODY;
+}
+
+/**
+ * Build a redacted {@link Recording}. Only safe headers survive; JSON object/array
+ * bodies have their secret paths masked (and the cached text is regenerated to
+ * match); query params are masked. Scalar and non-JSON bodies are not persisted —
+ * they can't be path-redacted, so a note is stored instead.
+ */
+export function buildRecording(params: BuildRecordingParams): Recording {
+  const safe = new Set(params.safeHeaders.map((h) => h.toLowerCase()));
+
+  let bodyJson = params.response.bodyJson;
+  let bodyText: string;
+  if (bodyJson !== undefined && typeof bodyJson === 'object' && bodyJson !== null) {
+    bodyJson = redactJsonValue(bodyJson, params.redaction.json_paths);
+    bodyText = JSON.stringify(bodyJson);
+  } else {
+    bodyJson = undefined;
+    bodyText = params.response.bodyText === '' ? '' : NON_RECORDABLE_BODY;
+  }
+
+  const requestBody = recordableBody(params.request.body, params.redaction.json_paths);
+
+  return {
+    version: 1,
+    scenarioId: params.scenarioId,
+    stepId: params.stepId,
+    recordedAt: params.recordedAt,
+    ...(params.environment ? { environment: params.environment } : {}),
+    request: {
+      method: params.request.method,
+      path: redactUrl(params.request.path, params.redaction.query_params),
+      query: redactQuery(params.request.query, params.redaction.query_params),
+      headers: keepSafeHeaders(params.request.headers, safe),
+      body: requestBody,
+      timeoutMs: params.request.timeoutMs,
+    },
+    response: {
+      status: params.response.status,
+      headers: keepSafeHeaders(params.response.headers, safe),
+      bodyText,
+      bodyJson,
+      durationMs: params.response.durationMs,
+      ...(params.response.error ? { error: params.response.error } : {}),
+    },
+  };
+}
+
+/** Resolve a fixture path under `fixtureDir`, rejecting absolute paths and `..` escapes. */
+function resolveFixturePath(fixtureDir: string, fixturePath: string): string {
+  if (isAbsolute(fixturePath)) {
+    throw new ValidationError(fixturePath, [
+      { path: '(fixture)', message: 'fixture path must be relative to the fixture directory' },
+    ]);
+  }
+  const base = resolve(fixtureDir);
+  const full = resolve(base, fixturePath);
+  if (full !== base && !full.startsWith(base + sep)) {
+    throw new ValidationError(fixturePath, [
+      { path: '(fixture)', message: `fixture path escapes the fixture directory: ${fixturePath}` },
+    ]);
+  }
+  return full;
+}
+
+/** Write a recording to `fixtureDir/fixturePath`, creating parent directories. */
+export function writeRecording(
+  fixtureDir: string,
+  fixturePath: string,
+  recording: Recording,
+): string {
+  const full = resolveFixturePath(fixtureDir, fixturePath);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, `${JSON.stringify(recording, null, 2)}\n`);
+  return full;
+}
+
+/** Load and validate a recording; a missing or invalid fixture fails clearly. */
+export function loadRecording(fixtureDir: string, fixturePath: string): Recording {
+  const full = resolveFixturePath(fixtureDir, fixturePath);
+  if (!existsSync(full)) {
+    throw new ValidationError(full, [
+      { path: '(fixture)', message: `recording fixture not found: ${fixturePath}` },
+    ]);
+  }
+  return validateWithSchema(recordingSchema, readDocumentFile(full), full);
+}
+
+/** The recorded legacy response, as an HttpResponseRecord for comparison. */
+export function recordingResponse(recording: Recording): HttpResponseRecord {
+  return recording.response;
+}

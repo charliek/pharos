@@ -1,9 +1,10 @@
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { defaultConfig, type PharosConfig } from '../src/config/config';
 import { ContractRegistry } from '../src/contract/load';
+import { type Recording, writeRecording } from '../src/execution/fixtures';
 import { runScenario } from '../src/execution/runner';
 import { loadScenarioFromText } from '../src/scenarios/load';
 import { replyJson, startTestServer, type TestServer } from './helpers/server';
@@ -29,6 +30,7 @@ function config(overrides: Partial<PharosConfig> = {}): PharosConfig {
     legacy_base_url: legacyServer?.url,
     new_base_url: newServer?.url,
     report_dir: reportDir,
+    fixture_dir: reportDir,
     ...overrides,
   };
 }
@@ -400,6 +402,155 @@ steps:
     });
     expect(result.pass).toBe(false);
     expect(result.steps[0].error).toMatch(/after boom/);
+  });
+});
+
+describe('runScenario — legacy_record', () => {
+  it('records a redacted legacy interaction when recording is enabled', async () => {
+    legacyServer = await startTestServer((_r, res) => {
+      res.setHeader('set-cookie', 'session=secretcookie');
+      replyJson(res, 200, { id: 1, token: 'SECRET-TOKEN' });
+    });
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rec.user
+name: rec
+service: s
+tags: [recording]
+mode: legacy_record
+steps:
+  - id: get
+    request: { method: GET, path: /users/1 }
+    recording:
+      fixture: users/get.json
+      safe_headers: [content-type]
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(
+      scenario,
+      'test.yaml',
+      config({ redaction: { headers: [], json_paths: ['$.token'], query_params: [] } }),
+      registry,
+      { recordingEnabled: true },
+    );
+    expect(result.pass).toBe(true);
+    const fixture = readFileSync(join(reportDir, 'users/get.json'), 'utf8');
+    expect(fixture).not.toContain('SECRET-TOKEN'); // body secret redacted
+    expect(fixture).not.toContain('secretcookie'); // set-cookie not in safe_headers
+    expect(fixture).toContain('content-type'); // safe header kept
+  });
+
+  it('does not write a recording when recording is disabled', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1 }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rec.skip
+name: skip
+service: s
+tags: [recording]
+mode: legacy_record
+steps:
+  - id: get
+    request: { method: GET, path: /users/1 }
+    recording: { fixture: users/skip.json }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      recordingEnabled: false,
+    });
+    expect(result.pass).toBe(true);
+    expect(result.steps[0].recordingSkipped).toBe(true);
+    expect(existsSync(join(reportDir, 'users/skip.json'))).toBe(false);
+  });
+});
+
+describe('runScenario — replay_against_recording', () => {
+  function writeFixture(name: string, body: unknown): void {
+    const recording: Recording = {
+      version: 1,
+      scenarioId: 'seed',
+      stepId: 'get',
+      recordedAt: '2024-01-01T00:00:00.000Z',
+      request: { method: 'GET', path: '/users/1' },
+      response: {
+        status: 200,
+        headers: {},
+        bodyText: JSON.stringify(body),
+        bodyJson: body,
+        durationMs: 1,
+      },
+    };
+    writeRecording(reportDir, name, recording);
+  }
+
+  it('replays a recording against the new service and passes on parity', async () => {
+    writeFixture('users/replay.json', { id: 1, name: 'A' });
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1, name: 'A' }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rep.user
+name: rep
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: get
+    recording: { fixture: users/replay.json }
+    request: { method: GET, path: /users/1 }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+    expect(newServer.requests).toHaveLength(1);
+  });
+
+  it('fails when the new response diverges from the recording', async () => {
+    writeFixture('users/mismatch.json', { id: 1, name: 'A' });
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1, name: 'B' }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rep.mismatch
+name: rep
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: get
+    recording: { fixture: users/mismatch.json }
+    request: { method: GET, path: /users/1 }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(false);
+    expect(result.steps[0].comparison?.mismatches.some((m) => m.path === '$.name')).toBe(true);
+  });
+
+  it('fails clearly when the replay fixture is missing', async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rep.missing
+name: missing
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: get
+    recording: { fixture: users/nope.json }
+    request: { method: GET, path: /users/1 }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(false);
+    expect(result.steps[0].error).toMatch(/not found/);
   });
 });
 

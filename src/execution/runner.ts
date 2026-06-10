@@ -26,6 +26,8 @@ export interface RunnerDeps {
   env?: NodeJS.ProcessEnv;
   hooks?: Record<string, HookFn>;
   comparators?: Record<string, CustomComparator>;
+  /** Allow legacy_record steps to write recordings (defaults to config.allow_recording_updates). */
+  recordingEnabled?: boolean;
 }
 
 function messageOf(error: unknown): string {
@@ -82,6 +84,7 @@ export async function runScenario(
       const result = await runStep(scenario, step, ctx, config, scenarioRules, {
         send,
         comparators: deps.comparators,
+        recordingEnabled: deps.recordingEnabled ?? config.allow_recording_updates,
       });
       try {
         await runHooks(step.after?.hooks, stepHookCtx, hooks);
