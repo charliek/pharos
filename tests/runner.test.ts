@@ -239,6 +239,170 @@ steps:
   });
 });
 
+describe('runScenario — hooks', () => {
+  it('runs a setup hook that assigns a variable used by a step', async () => {
+    let captured = '';
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    newServer = await startTestServer((r, res) => {
+      captured = r.url;
+      replyJson(res, 200, {});
+    });
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: hooks.setup
+name: setup
+service: s
+tags: [read]
+mode: compare_live
+setup:
+  hooks:
+    - name: genUser
+      assign: { userId: id }
+steps:
+  - id: get
+    request: { method: GET, path: "/users/{{ variables.userId }}" }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      hooks: { genUser: () => ({ id: 'u42' }) },
+    });
+    expect(result.pass).toBe(true);
+    expect(captured).toBe('/users/u42');
+  });
+
+  it('runs cleanup after both success and failure', async () => {
+    let cleanupRuns = 0;
+    const hooks = {
+      recordCleanup: () => {
+        cleanupRuns += 1;
+      },
+    };
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { v: 1 }));
+    newServer = await startTestServer((r, res) =>
+      replyJson(res, 200, { v: r.url === '/fail' ? 2 : 1 }),
+    );
+    const make = (id: string, path: string) =>
+      loadScenarioFromText(
+        `version: 1
+id: ${id}
+name: ${id}
+service: s
+tags: [read]
+mode: compare_live
+cleanup:
+  hooks: [{ name: recordCleanup }]
+steps:
+  - id: get
+    request: { method: GET, path: ${path} }
+    compare: { strategy: json_semantic, status: same }
+`,
+        'test.yaml',
+      );
+    const ok = await runScenario(make('c.ok', '/ok'), 'test.yaml', config(), registry, { hooks });
+    const fail = await runScenario(make('c.fail', '/fail'), 'test.yaml', config(), registry, {
+      hooks,
+    });
+    expect(ok.pass).toBe(true);
+    expect(fail.pass).toBe(false);
+    expect(cleanupRuns).toBe(2);
+  });
+
+  it('fails clearly on an unknown hook', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: hooks.unknown
+name: unknown
+service: s
+tags: [read]
+mode: compare_live
+setup:
+  hooks: [{ name: doesNotExist }]
+steps:
+  - id: get
+    request: { method: GET, path: /x }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, { hooks: {} });
+    expect(result.pass).toBe(false);
+    expect(result.error).toMatch(/unknown hook/);
+    expect(result.steps).toHaveLength(0);
+  });
+
+  it('runs cleanup even when setup throws', async () => {
+    let cleanupRan = false;
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: hooks.setupfail
+name: setupfail
+service: s
+tags: [read]
+mode: compare_live
+setup:
+  hooks: [{ name: boom }]
+cleanup:
+  hooks: [{ name: recordCleanup }]
+steps:
+  - id: get
+    request: { method: GET, path: /x }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      hooks: {
+        boom: () => {
+          throw new Error('setup boom');
+        },
+        recordCleanup: () => {
+          cleanupRan = true;
+        },
+      },
+    });
+    expect(result.pass).toBe(false);
+    expect(result.error).toMatch(/setup boom/);
+    expect(cleanupRan).toBe(true);
+    expect(result.steps).toHaveLength(0);
+  });
+
+  it('fails the step when an after hook throws', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { v: 1 }));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { v: 1 }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: hooks.afterfail
+name: afterfail
+service: s
+tags: [read]
+mode: compare_live
+steps:
+  - id: get
+    request: { method: GET, path: /x }
+    compare: { strategy: json_semantic, status: same }
+    after:
+      hooks: [{ name: boomAfter }]
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      hooks: {
+        boomAfter: () => {
+          throw new Error('after boom');
+        },
+      },
+    });
+    expect(result.pass).toBe(false);
+    expect(result.steps[0].error).toMatch(/after boom/);
+  });
+});
+
 describe('runScenario — new_only_assert', () => {
   it('asserts explicit expectations against the new service only', async () => {
     newServer = await startTestServer((_r, res) => replyJson(res, 200, { status: 'ok' }));

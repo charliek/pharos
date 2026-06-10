@@ -27,6 +27,8 @@ export interface PharosConfig {
   contract_dir: string;
   fixture_dir: string;
   report_dir: string;
+  /** Module exporting the hook registry (hooks/comparators/normalizers). */
+  hooks_module: string;
   default_timeout_ms: number;
   default_headers: Record<string, string>;
   output_mode: 'local' | 'ci';
@@ -48,6 +50,7 @@ export function defaultConfig(): PharosConfig {
     contract_dir: './contracts',
     fixture_dir: './fixtures/recordings',
     report_dir: './reports',
+    hooks_module: './hooks/index.ts',
     default_timeout_ms: 10_000,
     default_headers: {},
     output_mode: 'local',
@@ -77,6 +80,7 @@ const configFileSchema = z
     contract_dir: z.string().optional(),
     fixture_dir: z.string().optional(),
     report_dir: z.string().optional(),
+    hooks_module: z.string().optional(),
     default_timeout_ms: z.number().int().positive().optional(),
     default_headers: z.record(z.string()).optional(),
     output_mode: z.enum(['local', 'ci']).optional(),
@@ -156,6 +160,7 @@ export function loadConfig(options: LoadConfigOptions = {}): PharosConfig {
   config.contract_dir = resolve(cwd, config.contract_dir);
   config.fixture_dir = resolve(cwd, config.fixture_dir);
   config.report_dir = resolve(cwd, config.report_dir);
+  config.hooks_module = resolve(cwd, config.hooks_module);
 
   return config;
 }
