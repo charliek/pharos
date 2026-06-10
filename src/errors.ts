@@ -45,6 +45,17 @@ export class ValidationError extends Error {
 }
 
 /**
+ * A configuration problem (spec Section 6.3) — typically required config that is
+ * missing for the modes about to run. Carries each problem for a clear message.
+ */
+export class ConfigError extends Error {
+  constructor(readonly problems: string[]) {
+    super(`configuration error:\n  - ${problems.join('\n  - ')}`);
+    this.name = 'ConfigError';
+  }
+}
+
+/**
  * Parse `value` with a zod `schema`, throwing a file-addressed
  * {@link ValidationError} on failure. Collapses the safeParse → throw boilerplate
  * shared by every loader.
