@@ -33,6 +33,8 @@ export interface PharosConfig {
   default_headers: Record<string, string>;
   output_mode: 'local' | 'ci';
   allow_destructive_tests: boolean;
+  /** Additional guard required to run scenarios marked requiresProductionGuardOverride. */
+  allow_production_guard_override: boolean;
   allow_recording_updates: boolean;
   redaction: RedactionTargets;
 }
@@ -55,6 +57,7 @@ export function defaultConfig(): PharosConfig {
     default_headers: {},
     output_mode: 'local',
     allow_destructive_tests: false,
+    allow_production_guard_override: false,
     allow_recording_updates: false,
     redaction: {
       headers: ['authorization', 'cookie', 'set-cookie', 'x-api-key'],
@@ -85,6 +88,7 @@ const configFileSchema = z
     default_headers: z.record(z.string()).optional(),
     output_mode: z.enum(['local', 'ci']).optional(),
     allow_destructive_tests: z.boolean().optional(),
+    allow_production_guard_override: z.boolean().optional(),
     allow_recording_updates: z.boolean().optional(),
     redaction: redactionFileSchema.optional(),
   })

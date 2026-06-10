@@ -242,4 +242,21 @@ describe('compare — custom', () => {
     expect(fail.pass).toBe(false);
     expect(fail.diffText).toContain('nope');
   });
+
+  it('hands a custom comparator redacted responses so it cannot leak secrets', () => {
+    let observedToken: unknown;
+    const result = compare({
+      strategy: 'custom',
+      rules: rulesWith({
+        json: { ...defaultComparisonRules().json, redact_paths: ['$.token'] },
+      }),
+      candidate: resp(200, { token: 'SUPER-SECRET' }),
+      comparator: (ctx) => {
+        observedToken = (ctx.candidate.bodyJson as { token: unknown }).token;
+        return [{ path: '$.token', kind: 'value', actual: observedToken, message: 'token' }];
+      },
+    });
+    expect(observedToken).toBe('***REDACTED***');
+    expect(JSON.stringify(result)).not.toContain('SUPER-SECRET');
+  });
 });

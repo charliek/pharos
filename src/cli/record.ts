@@ -1,8 +1,8 @@
 import type { Command } from 'commander';
 import { loadConfig } from '../config/config';
-import { ConfigError } from '../errors';
+import { ConfigError, ValidationError } from '../errors';
 import { runProject } from '../execution/run-all';
-import { relativePath } from './util';
+import { printFileIssues, relativePath } from './util';
 
 interface RecordOptions {
   config?: string;
@@ -21,15 +21,15 @@ export function registerRecordCommand(program: Command): void {
     .option('-c, --config <path>', 'path to the pharos config file')
     .option('-s, --scenario <id>', 'record a single scenario by id')
     .action(async (options: RecordOptions) => {
-      const config = loadConfig({ configPath: options.config });
-      // CI refuses recording updates by default (spec Section 10.2).
-      if (config.output_mode === 'ci' && !config.allow_recording_updates) {
-        process.stderr.write(
-          'recording is refused in CI by default; set ALLOW_RECORDING_UPDATES=true to override\n',
-        );
-        process.exit(1);
-      }
       try {
+        const config = loadConfig({ configPath: options.config });
+        // CI refuses recording updates by default (spec Section 10.2).
+        if (config.output_mode === 'ci' && !config.allow_recording_updates) {
+          process.stderr.write(
+            'recording is refused in CI by default; set ALLOW_RECORDING_UPDATES=true to override\n',
+          );
+          process.exit(1);
+        }
         const results = await runProject(config, {
           recordingEnabled: true,
           scenarioId: options.scenario,
@@ -55,6 +55,10 @@ export function registerRecordCommand(program: Command): void {
       } catch (error) {
         if (error instanceof ConfigError) {
           process.stderr.write(`${error.message}\n`);
+          process.exit(1);
+        }
+        if (error instanceof ValidationError) {
+          printFileIssues(error.file, error.issues);
           process.exit(1);
         }
         throw error;

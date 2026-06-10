@@ -15,6 +15,8 @@ export interface ScenarioResult {
   name: string;
   pass: boolean;
   skipped: boolean;
+  /** Why the scenario was skipped (safety gate), if it was. */
+  skipReason?: string;
   steps: StepResult[];
   /** Lifecycle error (contract resolution, setup/cleanup hooks) that isn't a step mismatch. */
   error?: string;

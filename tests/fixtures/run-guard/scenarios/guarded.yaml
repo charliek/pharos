@@ -1,0 +1,13 @@
+version: 1
+id: run.guarded
+name: guarded scenario
+service: s
+tags: [write, destructive]
+mode: compare_live
+safety:
+  destructive: true
+  requiresProductionGuardOverride: true
+steps:
+  - id: x
+    request: { method: GET, path: /x }
+    compare: { strategy: json_semantic, status: same }

@@ -44,6 +44,10 @@ describe('assertConfigForModes', () => {
     }
   });
 
+  it('includes the production guard override flag with a safe default', () => {
+    expect(defaultConfig().allow_production_guard_override).toBe(false);
+  });
+
   it('reports every missing requirement together', () => {
     try {
       assertConfigForModes(configWith({}), ['compare_live']);

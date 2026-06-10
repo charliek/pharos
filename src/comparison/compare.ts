@@ -2,7 +2,7 @@ import type { HttpResponseRecord } from '../execution/http-client';
 import { diffJson, renderMismatches } from './json-diff';
 import { matchPathBetween, matchPathExpectation } from './matchers';
 import { normalizeJson } from './normalize';
-import { redactHeaderMismatches, redactJsonValue } from './redaction';
+import { redactHeaderMismatches, redactHeaders, redactJsonValue } from './redaction';
 import type { ComparisonResult, ComparisonStrategy, Mismatch } from './result';
 import type { ComparisonRules } from './rules';
 
@@ -114,13 +114,38 @@ function toResult(strategy: ComparisonStrategy, mismatches: Mismatch[]): Compari
   };
 }
 
+/**
+ * A redacted view of a response for a custom comparator: secret JSON paths and
+ * sensitive headers are masked so a comparator cannot surface them into a
+ * mismatch (and from there into a report).
+ */
+function redactedView(
+  response: HttpResponseRecord,
+  rules: ComparisonRules,
+  sensitiveHeaders: string[],
+): HttpResponseRecord {
+  const bodyJson =
+    response.bodyJson !== undefined
+      ? redactJsonValue(response.bodyJson, rules.json.redact_paths)
+      : undefined;
+  return {
+    status: response.status,
+    headers: redactHeaders(response.headers, sensitiveHeaders),
+    bodyText: bodyJson !== undefined ? JSON.stringify(bodyJson) : response.bodyText,
+    bodyJson,
+    durationMs: response.durationMs,
+    ...(response.error ? { error: response.error } : {}),
+  };
+}
+
 function runCustom(req: CompareRequest): ComparisonResult {
   if (!req.comparator) {
     throw new Error("strategy 'custom' requires a resolved comparator");
   }
+  const sensitiveHeaders = req.sensitiveHeaders ?? [];
   const result = req.comparator({
-    legacy: req.legacy,
-    candidate: req.candidate,
+    legacy: req.legacy ? redactedView(req.legacy, req.rules, sensitiveHeaders) : undefined,
+    candidate: redactedView(req.candidate, req.rules, sensitiveHeaders),
     rules: req.rules,
     args: req.comparatorArgs,
   });

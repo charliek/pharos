@@ -35,6 +35,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ConfigOverride {
 
   const destructive = parseBool(env.ALLOW_DESTRUCTIVE_TESTS);
   if (destructive !== undefined) out.allow_destructive_tests = destructive;
+  const productionGuard = parseBool(env.ALLOW_PRODUCTION_GUARD_OVERRIDE);
+  if (productionGuard !== undefined) out.allow_production_guard_override = productionGuard;
   const recording = parseBool(env.ALLOW_RECORDING_UPDATES);
   if (recording !== undefined) out.allow_recording_updates = recording;
 

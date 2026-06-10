@@ -21,6 +21,42 @@ export interface RunProjectOptions extends ScenarioFilter {
   modes?: ScenarioMode[];
 }
 
+/**
+ * Why a scenario should be skipped by a safety gate (spec Section 12), or
+ * undefined to run it. Destructive scenarios need explicit opt-in; environment
+ * restrictions are honored against the configured output mode.
+ */
+function scenarioSkipReason(scenario: Scenario, config: PharosConfig): string | undefined {
+  const destructive =
+    scenario.safety?.destructive === true || scenario.tags.includes('destructive');
+  if (destructive && !config.allow_destructive_tests) {
+    return 'destructive scenario requires ALLOW_DESTRUCTIVE_TESTS=true';
+  }
+  if (
+    scenario.safety?.requiresProductionGuardOverride === true &&
+    !config.allow_production_guard_override
+  ) {
+    return 'requires the production guard override (set ALLOW_PRODUCTION_GUARD_OVERRIDE=true)';
+  }
+  const allowed = scenario.safety?.allowedEnvironments;
+  if (allowed && !allowed.includes(config.output_mode)) {
+    return `not allowed in the '${config.output_mode}' environment`;
+  }
+  return undefined;
+}
+
+function skippedResult(scenario: Scenario, reason: string): ScenarioResult {
+  return {
+    scenarioId: scenario.id,
+    name: scenario.name,
+    pass: true,
+    skipped: true,
+    skipReason: reason,
+    steps: [],
+    durationMs: 0,
+  };
+}
+
 function loadFailureResult(file: string, error: unknown): ScenarioResult {
   const detail =
     error instanceof ValidationError
@@ -61,11 +97,21 @@ export async function runProject(
     selected.push({ file, scenario });
   }
 
-  // Fail fast if required base URLs are missing for the selected modes.
-  assertConfigForModes(config, new Set(selected.map((entry) => entry.scenario.mode)));
+  // Apply safety gates before requiring config: a skipped scenario imposes no
+  // base-URL requirement because it never runs.
+  const toRun: Array<{ file: string; scenario: Scenario }> = [];
+  const skips: ScenarioResult[] = [];
+  for (const entry of selected) {
+    const reason = scenarioSkipReason(entry.scenario, config);
+    if (reason) skips.push(skippedResult(entry.scenario, reason));
+    else toRun.push(entry);
+  }
 
-  const results: ScenarioResult[] = [...loadFailures];
-  for (const { file, scenario } of selected) {
+  // Fail fast if required base URLs are missing for the modes that will run.
+  assertConfigForModes(config, new Set(toRun.map((entry) => entry.scenario.mode)));
+
+  const results: ScenarioResult[] = [...loadFailures, ...skips];
+  for (const { file, scenario } of toRun) {
     results.push(
       await runScenario(scenario, file, config, contractRegistry, {
         hooks: hookRegistry.hooks,

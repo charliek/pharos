@@ -1,0 +1,12 @@
+version: 1
+id: run.destructive
+name: destructive scenario
+service: s
+tags: [write, destructive]
+mode: compare_live
+safety:
+  destructive: true
+steps:
+  - id: del
+    request: { method: DELETE, path: /d }
+    compare: { strategy: json_semantic, status: same }
