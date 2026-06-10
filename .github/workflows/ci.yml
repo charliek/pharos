@@ -42,6 +42,9 @@ jobs:
       - name: Test
         run: bun run test
 
+      - name: Validate scenarios and contracts
+        run: bun run ftest -- validate
+
   # Single required status check the branch ruleset can gate on. Keeping it a
   # separate aggregator job means the required check name stays stable even if
   # build-test later fans out into a matrix.

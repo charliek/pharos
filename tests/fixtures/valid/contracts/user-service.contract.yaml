@@ -1,0 +1,31 @@
+version: 1
+service: user-service
+description: Test contract fixture.
+defaults:
+  compare_status: true
+  compare_body: true
+  json:
+    ignore_paths:
+      - "$.metadata.requestId"
+    redact_paths:
+      - "$.user.email"
+routes:
+  - id: get-user
+    match:
+      methods: [GET]
+      path_template: /users/{id}
+    comparison:
+      json:
+        ignore_paths:
+          - "$.lastSeenAt"
+    tags: [read, migration-ready]
+  - id: list-users
+    match:
+      methods: [GET]
+      path_template: /users
+    comparison:
+      json:
+        sort_arrays:
+          - path: "$.items"
+            key: id
+    tags: [read]

@@ -1,0 +1,8 @@
+{
+  "legacy_base_url": "http://file-legacy",
+  "default_timeout_ms": 1234,
+  "scenario_dir": "./from-file-scenarios",
+  "redaction": {
+    "headers": ["x-secret"]
+  }
+}

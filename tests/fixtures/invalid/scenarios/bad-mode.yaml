@@ -1,0 +1,13 @@
+version: 1
+id: users.bad-mode
+name: Scenario with an unknown mode
+service: user-service
+tags: [read]
+mode: teleport
+steps:
+  - id: s1
+    request:
+      method: GET
+      path: /users/1
+    compare:
+      strategy: json_semantic

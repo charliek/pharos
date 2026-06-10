@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "users.list-users",
+  "name": "List users",
+  "service": "user-service",
+  "tags": ["read"],
+  "mode": "compare_live",
+  "contract": "../contracts/user-service.contract.yaml#list-users",
+  "steps": [
+    {
+      "id": "list",
+      "request": { "method": "GET", "path": "/users" },
+      "compare": { "strategy": "json_semantic", "status": "same" }
+    }
+  ]
+}
