@@ -78,6 +78,11 @@ export function parseJsonPath(path: string): JsonPathSegment[] {
   if (segments.length === 0) {
     throw new JsonPathError(path, 'path must reference at least one field');
   }
+  // The documented subset has a single wildcard form ($.items[*].field). Keeping
+  // to one wildcard preserves portability and check-contract parity with Limen.
+  if (segments.filter((segment) => segment.type === 'wildcard').length > 1) {
+    throw new JsonPathError(path, 'at most one [*] wildcard is supported');
+  }
   for (let s = 0; s < segments.length; s++) {
     if (segments[s].type !== 'wildcard') continue;
     const keyBefore = s > 0 && segments[s - 1].type === 'key';
@@ -99,5 +104,70 @@ export function isSupportedJsonPath(path: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+// --- Evaluation -------------------------------------------------------------
+// Operations that walk parsed segments over a JSON value. The grammar guarantees
+// the final segment is always a key, which keeps remove/transform targeting the
+// parent container of a named field.
+
+/** True for a non-null, non-array object — the only thing a key segment indexes. */
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Follow `segments` from `root`, returning every value reached (wildcards fan out). */
+function navigate(root: unknown, segments: JsonPathSegment[]): unknown[] {
+  let current: unknown[] = [root];
+  for (const segment of segments) {
+    const next: unknown[] = [];
+    for (const value of current) {
+      if (segment.type === 'key') {
+        if (isPlainObject(value) && segment.key in value) next.push(value[segment.key]);
+      } else if (Array.isArray(value)) {
+        next.push(...value);
+      }
+    }
+    current = next;
+  }
+  return current;
+}
+
+/** Every value matched by a parsed path (empty when nothing matches). */
+export function getAtPath(root: unknown, segments: JsonPathSegment[]): unknown[] {
+  return navigate(root, segments);
+}
+
+/** The parent containers and final key holding each matched leaf. */
+function resolveLeafTargets(
+  root: unknown,
+  segments: JsonPathSegment[],
+): Array<{ parent: Record<string, unknown>; key: string }> {
+  if (segments.length === 0) return [];
+  const last = segments[segments.length - 1];
+  if (last.type !== 'key') return [];
+  const targets: Array<{ parent: Record<string, unknown>; key: string }> = [];
+  for (const parent of navigate(root, segments.slice(0, -1))) {
+    if (isPlainObject(parent)) targets.push({ parent, key: last.key });
+  }
+  return targets;
+}
+
+/** Remove every leaf matched by the path (mutates `root`). */
+export function removeAtPath(root: unknown, segments: JsonPathSegment[]): void {
+  for (const { parent, key } of resolveLeafTargets(root, segments)) {
+    delete parent[key];
+  }
+}
+
+/** Replace every existing value matched by the path with `fn(value)` (mutates `root`). */
+export function transformAtPath(
+  root: unknown,
+  segments: JsonPathSegment[],
+  fn: (value: unknown) => unknown,
+): void {
+  for (const { parent, key } of resolveLeafTargets(root, segments)) {
+    if (key in parent) parent[key] = fn(parent[key]);
   }
 }

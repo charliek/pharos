@@ -37,13 +37,13 @@ describe('parseJsonPath — supported subset', () => {
     expect(parseJsonPath('$.a.b.c.d')).toHaveLength(4);
   });
 
-  it('allows multiple wildcards, each between fields', () => {
-    expect(parseJsonPath('$.groups[*].users[*].id')).toEqual([
-      { type: 'key', key: 'groups' },
+  it('allows multiple keys before and after a single wildcard', () => {
+    expect(parseJsonPath('$.a.b[*].c.d')).toEqual([
+      { type: 'key', key: 'a' },
+      { type: 'key', key: 'b' },
       { type: 'wildcard' },
-      { type: 'key', key: 'users' },
-      { type: 'wildcard' },
-      { type: 'key', key: 'id' },
+      { type: 'key', key: 'c' },
+      { type: 'key', key: 'd' },
     ]);
   });
 });
@@ -54,6 +54,7 @@ describe('parseJsonPath — rejections (out of subset)', () => {
     '$', // bare root — not one of the supported forms
     '$[*].id', // wildcard at root (must follow a field)
     '$.items[*]', // trailing wildcard (must be followed by a field)
+    '$.a[*].b[*].c', // more than one wildcard
     '$.items[0]', // numeric index
     '$..name', // recursive descent
     "$['field']", // bracket notation
