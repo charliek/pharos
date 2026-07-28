@@ -1,4 +1,14 @@
-import { type CompareRequest, type CustomComparator, compare } from '../comparison/compare';
+import {
+  type CompareRequest,
+  type CustomComparator,
+  compare,
+  type ExpectSpec,
+} from '../comparison/compare';
+import type {
+  ExpectedAttribute,
+  ExpectedCookie,
+  ExpectedLocation,
+} from '../comparison/expectations';
 import type { ComparisonResult } from '../comparison/result';
 import type { ComparisonRules } from '../comparison/rules';
 import type { PharosConfig } from '../config/config';
@@ -141,6 +151,85 @@ function resolveRequest(step: ScenarioStep, ctx: VariableContext): HttpRequestSp
     form,
     followRedirects: request.follow_redirects,
     timeoutMs: request.timeoutMs,
+  };
+}
+
+/** Substitute a string-valued attribute, preserving type for a whole-string template. */
+function substituteAttribute(value: ExpectedAttribute, ctx: VariableContext): ExpectedAttribute {
+  if (typeof value !== 'string') return value;
+  const resolved = substituteValue(value, ctx);
+  return typeof resolved === 'string' ||
+    typeof resolved === 'number' ||
+    typeof resolved === 'boolean'
+    ? resolved
+    : String(resolved);
+}
+
+function substituteExpectedCookie(cookie: ExpectedCookie, ctx: VariableContext): ExpectedCookie {
+  return {
+    ...cookie,
+    name: substituteText(cookie.name, ctx),
+    value: cookie.value !== undefined ? substituteText(cookie.value, ctx) : undefined,
+    attributes: cookie.attributes
+      ? Object.fromEntries(
+          Object.entries(cookie.attributes).map(([name, value]) => [
+            name,
+            substituteAttribute(value, ctx),
+          ]),
+        )
+      : undefined,
+  };
+}
+
+function substituteExpectedLocation(
+  location: ExpectedLocation,
+  ctx: VariableContext,
+): ExpectedLocation {
+  return {
+    ...location,
+    path: location.path !== undefined ? substituteText(location.path, ctx) : undefined,
+    query: location.query
+      ? Object.fromEntries(
+          Object.entries(location.query).map(([name, value]) => [name, substituteText(value, ctx)]),
+        )
+      : undefined,
+    query_present: location.query_present?.map((name) => substituteText(name, ctx)),
+    query_absent: location.query_absent?.map((name) => substituteText(name, ctx)),
+  };
+}
+
+/**
+ * Resolve template variables inside an `explicit_expectations` block (spec
+ * Section 4.7's substitution paragraph / Section 7.1). `expect.status` stays
+ * literal — it is compared as an already-typed integer, never templated. Every
+ * other string leaf is substituted with the same engine `resolveRequest` uses,
+ * evaluated by the caller *after* this step's own extraction, so an assertion
+ * can reference a value the same step just captured.
+ */
+function substituteExpect(expect: ExpectSpec, ctx: VariableContext): ExpectSpec {
+  const jsonPaths = expect.body?.json_paths;
+  return {
+    ...expect,
+    headers: expect.headers
+      ? Object.fromEntries(
+          Object.entries(expect.headers).map(([name, value]) => [name, substituteText(value, ctx)]),
+        )
+      : undefined,
+    header_absent: expect.header_absent?.map((name) => substituteText(name, ctx)),
+    header_present: expect.header_present?.map((name) => substituteText(name, ctx)),
+    body: jsonPaths
+      ? {
+          json_paths: Object.fromEntries(
+            Object.entries(jsonPaths).map(([path, value]) => [
+              path,
+              typeof value === 'string' ? substituteValue(value, ctx) : value,
+            ]),
+          ),
+        }
+      : expect.body,
+    set_cookie: expect.set_cookie?.map((cookie) => substituteExpectedCookie(cookie, ctx)),
+    set_cookie_absent: expect.set_cookie_absent?.map((name) => substituteText(name, ctx)),
+    location: expect.location ? substituteExpectedLocation(expect.location, ctx) : undefined,
   };
 }
 
@@ -400,6 +489,18 @@ export async function runStep(
     );
   }
 
+  // Expectation values are templated at evaluation time (spec Section 4.7),
+  // i.e. after the extraction above — so an expect.* value can reference a
+  // variable this same step just captured, not only an earlier one's.
+  let expect: ExpectSpec | undefined;
+  try {
+    expect = step.compare.expect ? substituteExpect(step.compare.expect, ctx) : undefined;
+  } catch (error) {
+    if (error instanceof VariableError)
+      return executionFailure(step, `step '${step.id}': ${error.message}`, legacy, candidate);
+    throw error;
+  }
+
   const request: CompareRequest = {
     strategy: step.compare.strategy,
     rules: withConfiguredRedaction(scenarioRules ?? inlineComparisonRules(step.compare), config),
@@ -407,7 +508,7 @@ export async function runStep(
     candidate,
     statusSame: step.compare.status === 'same',
     requireMatchingPaths: step.compare.body?.require_matching_paths,
-    expect: step.compare.expect,
+    expect,
     comparator,
     comparatorArgs: step.compare.args,
     sensitiveHeaders: config.redaction.headers,

@@ -86,14 +86,17 @@ compare:
     status: 404
     headers: { x-frame-options: DENY }        # exact, case-insensitive names
     header_absent: [x-forwarded-host]
+    header_present: [retry-after]              # any non-empty value, not asserted exactly
     body:
       json_paths:
         $.error.code: USER_NOT_FOUND
+        $.identity_id: "{{ variables.identityId }}"  # templated (see below)
     set_cookie:                                # order-insensitive
       - name: session
         value_present: true                    # or `value: <exact>`, never both
         attributes: { Path: /, HttpOnly: true } # true/false = flag presence
         exact_attributes: false                 # true: the full attribute set
+    set_cookie_absent: [refresh]               # no Set-Cookie entry with this name
     location:
       path: /login
       query: { error: access_denied }
@@ -105,14 +108,26 @@ compare:
 
 `explicit_expectations` must assert at least one of `expect.status`,
 `expect.body.json_paths`, `expect.headers`, `expect.header_absent`,
-`expect.set_cookie`, `expect.location`. Naming `set-cookie` or `cookie` in
-`expect.headers` / `expect.header_absent` is a validation error — those read the
-lossy single-value header map; assert cookies with `expect.set_cookie`, which
-reads the lossless capture. Each `set_cookie` entry consumes the first
-not-yet-consumed response cookie of that name, in response order; response
-cookies no expectation consumed are not an error. A relative `Location` is
-resolved against the request URL before its parts are asserted. Cookie values
-are never rendered into a failure, expected or actual.
+`expect.header_present`, `expect.set_cookie`, `expect.set_cookie_absent`,
+`expect.location`. Naming `set-cookie` or `cookie` in `expect.headers` /
+`expect.header_absent` / `expect.header_present` is a validation error — those
+read the lossy single-value header map; assert cookies with `expect.set_cookie`
+/ `expect.set_cookie_absent`, which read the lossless capture. Each `set_cookie`
+entry consumes the first not-yet-consumed response cookie of that name, in
+response order; response cookies no expectation consumed are not an error.
+`set_cookie_absent` checks the whole response by name instead — presence only,
+independent of any `set_cookie` block's consumption on the same step. A
+relative `Location` is resolved against the request URL before its parts are
+asserted. Cookie values are never rendered into a failure, expected or actual.
+
+Every string value inside `expect` — `headers`, `header_absent`,
+`header_present`, `body.json_paths`, `set_cookie` (`name`/`value`/`attributes`),
+`set_cookie_absent`, and `location` — is substituted with the same
+`{{ variables.x }}` / `{{ env.X }}` engine requests use, evaluated after this
+step's own extraction. `expect.status` is the one exception and is never
+templated. A whole-string template preserves the resolved value's type, so a
+templated `body.json_paths` value or cookie `attributes` entry need not be a
+string.
 
 The behavioral vocabulary under `compare.body` (ignore_paths, redact_paths,
 sort_arrays, unordered_arrays, normalize_timestamps, enum_aliases) plus

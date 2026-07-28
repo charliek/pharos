@@ -640,6 +640,77 @@ steps:
   });
 });
 
+describe('runScenario — templated expect (spec §4.7/§7.1)', () => {
+  it("resolves a templated json_path and set_cookie value from this step's own extraction", async () => {
+    newServer = await startTestServer((_r, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.setHeader('set-cookie', ['session=user-42; Path=/']);
+      res.end(JSON.stringify({ identity_id: 'user-42' }));
+    });
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: auth.templated-expect
+name: templated expect
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: me
+    request: { method: GET, path: /me }
+    extract:
+      identityId: { from: response.body, path: $.identity_id }
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+        body:
+          json_paths:
+            $.identity_id: "{{ variables.identityId }}"
+        set_cookie:
+          - name: session
+            value: "{{ variables.identityId }}"
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+  });
+
+  it('fails a templated set_cookie value that does not match the extracted variable', async () => {
+    newServer = await startTestServer((_r, res) => {
+      res.statusCode = 200;
+      res.setHeader('content-type', 'application/json');
+      res.setHeader('set-cookie', ['session=wrong-value; Path=/']);
+      res.end(JSON.stringify({ identity_id: 'user-42' }));
+    });
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: auth.templated-expect-mismatch
+name: templated expect mismatch
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: me
+    request: { method: GET, path: /me }
+    extract:
+      identityId: { from: response.body, path: $.identity_id }
+    compare:
+      strategy: explicit_expectations
+      expect:
+        set_cookie:
+          - name: session
+            value: "{{ variables.identityId }}"
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(false);
+    expect(result.steps[0].comparison?.mismatches[0]?.kind).toBe('set_cookie.value');
+  });
+});
+
 describe('runScenario — manual redirect chain', () => {
   it('walks a 30x hop by hop, replaying the Location and a captured cookie', async () => {
     newServer = await startTestServer((req, res) => {

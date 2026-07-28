@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   collectCookies,
+  EMPTY,
   headerValue,
   locateUrl,
   type ParsedCookie,
@@ -12,9 +13,9 @@ import { asciiLower, maskQueryValue, REDACTED } from './redaction';
 import type { Mismatch } from './result';
 
 /**
- * The one-sided `expect` assertion vocabulary (spec Section 4.7): headers,
- * absent headers, `Set-Cookie`, and `Location`, asserted against a single (new)
- * response.
+ * The one-sided `expect` assertion vocabulary (spec Section 4.7): present/absent
+ * headers, present/absent `Set-Cookie` entries, and `Location`, asserted against
+ * a single (new) response.
  *
  * These reuse the **same** parsers as the two-sided `set_cookie`/`location`
  * comparison dimensions (Section 8.6) — one implementation, two consumers.
@@ -61,7 +62,9 @@ export type ExpectedLocation = z.infer<typeof expectedLocationSchema>;
 export interface HeaderExpectations {
   headers?: Record<string, string>;
   header_absent?: string[];
+  header_present?: string[];
   set_cookie?: ExpectedCookie[];
+  set_cookie_absent?: string[];
   location?: ExpectedLocation;
 }
 
@@ -111,6 +114,44 @@ function assertHeadersAbsent(names: string[], response: ResponseUnderTest, out: 
       kind: 'header',
       actual,
       message: `header '${asciiLower(name)}' must be absent`,
+    });
+  }
+}
+
+/**
+ * Assert named headers are present with **any** non-empty value — for a header
+ * whose exact value is inherently dynamic (e.g. `Retry-After`), only presence
+ * is meaningful. Reports the same `header` kind `headers` uses.
+ */
+function assertHeadersPresent(names: string[], response: ResponseUnderTest, out: Mismatch[]): void {
+  for (const name of names) {
+    const actual = headerValue(response.headers, name);
+    if (actual !== undefined && actual !== '') continue;
+    out.push({
+      path: `headers.${asciiLower(name)}`,
+      kind: 'header',
+      expected: PRESENT,
+      actual: actual === undefined ? undefined : EMPTY,
+      message: `header '${asciiLower(name)}' must be present with a non-empty value`,
+    });
+  }
+}
+
+/**
+ * Assert no `Set-Cookie` entry with these names exists on the response —
+ * presence only, independent of any `set_cookie` block's consume-and-pair
+ * bookkeeping on the same step.
+ */
+function assertCookiesAbsent(names: string[], response: ResponseUnderTest, out: Mismatch[]): void {
+  const { cookies } = collectCookies(response.setCookie);
+  const present = new Set(cookies.map((cookie) => cookie.name));
+  for (const name of names) {
+    if (!present.has(name)) continue;
+    out.push({
+      path: `set_cookie.${name}`,
+      kind: 'set_cookie.presence',
+      actual: PRESENT,
+      message: `cookie '${name}' must not be set`,
     });
   }
 }
@@ -280,6 +321,8 @@ export function assertHeaderExpectations(
 ): void {
   if (expect.headers) assertHeaders(expect.headers, response, out);
   if (expect.header_absent) assertHeadersAbsent(expect.header_absent, response, out);
+  if (expect.header_present) assertHeadersPresent(expect.header_present, response, out);
   if (expect.set_cookie) assertCookies(expect.set_cookie, response, out);
+  if (expect.set_cookie_absent) assertCookiesAbsent(expect.set_cookie_absent, response, out);
   if (expect.location) assertLocation(expect.location, response, out, options);
 }

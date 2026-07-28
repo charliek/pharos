@@ -59,6 +59,54 @@ describe('expect.headers / expect.header_absent', () => {
   });
 });
 
+describe('expect.header_present', () => {
+  it('accepts a header present with any non-empty value', () => {
+    const candidate = response({ 'retry-after': '30' });
+    expect(kinds({ header_present: ['Retry-After'] }, candidate)).toEqual([]);
+  });
+
+  it('reports a missing header', () => {
+    const candidate = response({});
+    expect(kinds({ header_present: ['retry-after'] }, candidate)).toEqual(['header']);
+  });
+
+  it('reports a header present with an empty value', () => {
+    const candidate = response({ 'retry-after': '' });
+    expect(kinds({ header_present: ['retry-after'] }, candidate)).toEqual(['header']);
+  });
+});
+
+describe('expect.set_cookie_absent', () => {
+  const loginResponse = response({}, ['session=abc123; Path=/', 'theme=dark; Path=/']);
+
+  it('passes when the named cookie was never set', () => {
+    expect(kinds({ set_cookie_absent: ['refresh'] }, loginResponse)).toEqual([]);
+  });
+
+  it('reports a mismatch when the named cookie was set', () => {
+    expect(kinds({ set_cookie_absent: ['session'] }, loginResponse)).toEqual([
+      'set_cookie.presence',
+    ]);
+  });
+
+  it('never renders the cookie value it found', () => {
+    const result = assertExpect(
+      { set_cookie_absent: ['session'] },
+      response({}, ['session=actual-secret-value; Path=/']),
+    );
+    const rendered = `${JSON.stringify(result)}${result.diffText}`;
+    expect(rendered).not.toContain('actual-secret-value');
+  });
+
+  it('is independent of a set_cookie block on the same step', () => {
+    // set_cookie consumes 'session'; set_cookie_absent still checks the whole
+    // response, unaffected by that consumption.
+    expect(
+      kinds({ set_cookie: [{ name: 'session' }], set_cookie_absent: ['session'] }, loginResponse),
+    ).toEqual(['set_cookie.presence']);
+  });
+});
+
 describe('expect.set_cookie', () => {
   const loginResponse = response({}, [
     'session=abc123; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=2592000',
@@ -289,10 +337,12 @@ describe('expect vocabulary validation', () => {
           'status: 303',
           'headers: { x-frame-options: DENY }',
           'header_absent: [x-forwarded-host]',
+          'header_present: [retry-after]',
           'set_cookie:',
           '  - name: session',
           '    value_present: true',
           '    attributes: { Path: /, HttpOnly: true }',
+          'set_cookie_absent: [refresh]',
           'location:',
           '  path: /login',
           '  query: { error: access_denied }',
@@ -301,13 +351,21 @@ describe('expect vocabulary validation', () => {
     ).toEqual([]);
   });
 
-  it('rejects naming set-cookie or cookie in headers / header_absent', () => {
+  it('rejects naming set-cookie or cookie in headers / header_absent / header_present', () => {
     expect(issuesOf(scenarioWithExpect('headers: { Set-Cookie: x }'))[0]).toMatchObject({
       path: 'steps[0].compare.expect.headers.Set-Cookie',
     });
     expect(issuesOf(scenarioWithExpect('header_absent: [cookie]'))[0]).toMatchObject({
       path: 'steps[0].compare.expect.header_absent[0]',
     });
+    expect(issuesOf(scenarioWithExpect('header_present: [Cookie]'))[0]).toMatchObject({
+      path: 'steps[0].compare.expect.header_present[0]',
+    });
+  });
+
+  it('accepts a header_present-only or set_cookie_absent-only expectation as sufficient', () => {
+    expect(issuesOf(scenarioWithExpect('header_present: [retry-after]'))).toEqual([]);
+    expect(issuesOf(scenarioWithExpect('set_cookie_absent: [refresh]'))).toEqual([]);
   });
 
   it('rejects a cookie expectation asserting both value and value_present', () => {

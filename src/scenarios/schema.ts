@@ -164,6 +164,7 @@ const expectSchema = z
     status: z.number().int().optional(),
     headers: z.record(z.string()).optional(),
     header_absent: z.array(z.string()).optional(),
+    header_present: z.array(z.string()).optional(),
     body: z
       .object({ json_paths: z.record(z.unknown()).optional() })
       .strict()
@@ -171,6 +172,7 @@ const expectSchema = z
     // The assertion engine's own schemas (spec Section 4.7), so the loader and
     // the engine cannot drift apart.
     set_cookie: z.array(expectedCookieSchema).optional(),
+    set_cookie_absent: z.array(z.string().min(1)).optional(),
     location: expectedLocationSchema.optional(),
   })
   .strict()
@@ -180,7 +182,7 @@ const expectSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path,
-        message: `expect.headers/header_absent must not name '${name}' — the single-value headers map keeps only the last Set-Cookie (spec Section 9.2); assert cookies with expect.set_cookie`,
+        message: `expect.headers/header_absent/header_present must not name '${name}' — the single-value headers map keeps only the last Set-Cookie (spec Section 9.2); assert cookies with expect.set_cookie/set_cookie_absent`,
       });
     };
     for (const name of Object.keys(expect.headers ?? {})) {
@@ -188,6 +190,9 @@ const expectSchema = z
     }
     for (const [index, name] of (expect.header_absent ?? []).entries()) {
       rejectCookieHeader(['header_absent', index], name);
+    }
+    for (const [index, name] of (expect.header_present ?? []).entries()) {
+      rejectCookieHeader(['header_present', index], name);
     }
     for (const [index, cookie] of (expect.set_cookie ?? []).entries()) {
       // Field *presence*, not truthiness: `{ value: abc, value_present: false }`
@@ -255,14 +260,16 @@ const compareSchema = z
           (jsonPaths !== undefined && Object.keys(jsonPaths).length > 0) ||
           Object.keys(expect.headers ?? {}).length > 0 ||
           (expect.header_absent?.length ?? 0) > 0 ||
+          (expect.header_present?.length ?? 0) > 0 ||
           (expect.set_cookie?.length ?? 0) > 0 ||
+          (expect.set_cookie_absent?.length ?? 0) > 0 ||
           expect.location !== undefined;
         if (!asserts) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['expect'],
             message:
-              "strategy 'explicit_expectations' must assert at least one of expect.status, expect.body.json_paths, expect.headers, expect.header_absent, expect.set_cookie, expect.location",
+              "strategy 'explicit_expectations' must assert at least one of expect.status, expect.body.json_paths, expect.headers, expect.header_absent, expect.header_present, expect.set_cookie, expect.set_cookie_absent, expect.location",
           });
         }
         if (jsonPaths) {
