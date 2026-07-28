@@ -1,5 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import type { HookContext } from '../src/execution/hooks';
+// This is Pharos's own repo, so its `hooks/index.ts` (used by the example
+// scenarios and `bun run ftest`) imports the public barrel by relative path
+// rather than the package name: there is no node_modules self-link for a
+// standalone (non-workspace) package, so `tsc --noEmit` cannot resolve
+// `import ... from 'pharos'` even though bun's own runtime resolver can
+// (verified while building this barrel, spec Section 19.1). A **scaffolded
+// target repo** installs Pharos as a real git dependency, so its
+// `hooks/index.ts` (written by `pharos init`, Section 19.2) imports from the
+// package name, `'pharos'`, not a relative path into this source tree.
+import type { HookContext } from '../src/index';
 
 /**
  * The example hook registry. Pharos loads this module (config.hooks_module) and

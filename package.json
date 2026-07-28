@@ -15,6 +15,16 @@
   "bin": {
     "pharos": "./src/cli/index.ts"
   },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "hooks",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "ftest": "bun run src/cli/index.ts",
     "pharos": "bun run src/cli/index.ts",
