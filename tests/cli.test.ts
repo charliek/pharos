@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { buildProgram } from '../src/cli/program';
 
 describe('cli program', () => {
-  it('exposes the four MVP subcommands', () => {
+  it('exposes the MVP subcommands', () => {
     const program = buildProgram();
     const names = program.commands.map((command) => command.name()).sort();
-    expect(names).toEqual(['check-contract', 'record', 'run', 'validate']);
+    expect(names).toEqual(['check-contract', 'init', 'record', 'run', 'validate']);
   });
 
   it('reports its version', () => {
