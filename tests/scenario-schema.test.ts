@@ -33,6 +33,14 @@ steps:
       status: same
 `;
 
+/** VALID with the step's request block rewritten (one `field: value` per line). */
+function withRequest(...lines: string[]): string {
+  return VALID.replace(
+    '      method: GET\n      path: /users/1\n',
+    lines.map((line) => `      ${line}\n`).join(''),
+  );
+}
+
 describe('scenario schema — acceptance', () => {
   it('accepts a valid minimal scenario', () => {
     expect(() => loadScenarioFromText(VALID, 'scenario.yaml')).not.toThrow();
@@ -220,9 +228,72 @@ steps:
     expect(issuesOf(yaml).some((i) => /supported subset/.test(i.message))).toBe(true);
   });
 
-  it('rejects HEAD as a request method (requests are GET/POST/PUT/PATCH/DELETE)', () => {
-    expect(paths(VALID.replace('method: GET', 'method: HEAD'))).toContain(
+  it('rejects TRACE as a request method (spec Section 9.1 lists the seven)', () => {
+    expect(paths(VALID.replace('method: GET', 'method: TRACE'))).toContain(
       'steps[0].request.method',
+    );
+  });
+
+  it.each(['OPTIONS', 'HEAD'])('accepts %s as a request method', (method) => {
+    expect(paths(VALID.replace('method: GET', `method: ${method}`))).toEqual([]);
+  });
+
+  it.each([
+    ['body', 'body: { a: 1 }'],
+    ['form', 'form: { a: "1" }'],
+  ])('rejects %s on an OPTIONS request (bodies are unreliable there)', (field, line) => {
+    const yaml = withRequest('method: OPTIONS', 'path: /users', line);
+    expect(paths(yaml)).toContain(`steps[0].request.${field}`);
+  });
+
+  it('rejects a request that sets both body and form', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /token',
+      'body: { a: 1 }',
+      'form: { grant_type: authorization_code }',
+    );
+    expect(paths(yaml)).toContain('steps[0].request.form');
+  });
+
+  it('accepts follow_redirects and a form body', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'follow_redirects: false',
+      'form: { grant_type: authorization_code, expires_in: 300, offline: true }',
+    );
+    expect(paths(yaml)).toEqual([]);
+  });
+
+  // Cookie extraction differs from the two sources above only in its `from`.
+  const cookieExtract = (from: string) => `
+version: 1
+id: auth.refresh-cookie
+name: Refresh cookie
+service: user-service
+tags: [read]
+mode: new_only_assert
+steps:
+  - id: login
+    request: { method: POST, path: /login }
+    extract:
+      refreshToken:
+        from: ${from}
+        path: refresh_token
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+`;
+
+  it('accepts a set_cookie extract source with a cookie name (not a JSONPath)', () => {
+    expect(paths(cookieExtract('response.set_cookie'))).toEqual([]);
+  });
+
+  it('rejects legacy.set_cookie in new_only_assert (there is no legacy response)', () => {
+    expect(paths(cookieExtract('legacy.set_cookie'))).toContain(
+      'steps[0].extract.refreshToken.from',
     );
   });
 

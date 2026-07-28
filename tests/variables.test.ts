@@ -52,7 +52,8 @@ describe('substitution', () => {
 describe('extraction', () => {
   const candidate: HttpResponseRecord = {
     status: 200,
-    headers: { etag: 'e1' },
+    headers: { etag: 'e1', 'set-cookie': 'sid=b2' },
+    setCookie: ['sid=b1; Path=/', 'refresh=r1; Path=/auth; HttpOnly', 'sid=b2; Path=/'],
     bodyText: '{"id":"x1"}',
     bodyJson: { id: 'x1' },
     durationMs: 1,
@@ -64,6 +65,26 @@ describe('extraction', () => {
 
   it('extracts a header by name (case-insensitive)', () => {
     expect(extractValue({ from: 'new.headers', path: 'ETag' }, { candidate })).toBe('e1');
+  });
+
+  it('extracts a cookie value by name from the lossless setCookie capture', () => {
+    expect(extractValue({ from: 'new.set_cookie', path: 'refresh' }, { candidate })).toBe('r1');
+  });
+
+  it('takes the last occurrence when a cookie name repeats (RFC 6265)', () => {
+    expect(extractValue({ from: 'new.set_cookie', path: 'sid' }, { candidate })).toBe('b2');
+  });
+
+  it('yields undefined for a cookie that is not set (like a missing header)', () => {
+    expect(extractValue({ from: 'new.set_cookie', path: 'nope' }, { candidate })).toBeUndefined();
+    expect(extractValue({ from: 'new.headers', path: 'nope' }, { candidate })).toBeUndefined();
+  });
+
+  it('never extracts cookie attributes', () => {
+    expect(extractValue({ from: 'new.set_cookie', path: 'Path' }, { candidate })).toBeUndefined();
+    expect(
+      extractValue({ from: 'new.set_cookie', path: 'HttpOnly' }, { candidate }),
+    ).toBeUndefined();
   });
 
   it('fails when the requested side is unavailable', () => {

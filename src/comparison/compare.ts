@@ -2,7 +2,7 @@ import type { HttpResponseRecord } from '../execution/http-client';
 import { diffJson, renderMismatches } from './json-diff';
 import { matchPathBetween, matchPathExpectation } from './matchers';
 import { normalizeJson } from './normalize';
-import { redactHeaderMismatches, redactHeaders, redactJsonValue } from './redaction';
+import { REDACTED, redactHeaderMismatches, redactHeaders, redactJsonValue } from './redaction';
 import type { ComparisonResult, ComparisonStrategy, Mismatch } from './result';
 import type { ComparisonRules } from './rules';
 
@@ -128,9 +128,14 @@ function redactedView(
     response.bodyJson !== undefined
       ? redactJsonValue(response.bodyJson, rules.json.redact_paths)
       : undefined;
+  // Set-Cookie values are secrets, so the redacted view masks each captured
+  // header wholesale when set-cookie is sensitive; attribute-level cookie
+  // redaction arrives with the set_cookie comparison dimension (Section 8.6).
+  const cookiesSensitive = sensitiveHeaders.some((name) => name.toLowerCase() === 'set-cookie');
   return {
     status: response.status,
     headers: redactHeaders(response.headers, sensitiveHeaders),
+    setCookie: cookiesSensitive ? response.setCookie.map(() => REDACTED) : response.setCookie,
     bodyText: bodyJson !== undefined ? JSON.stringify(bodyJson) : response.bodyText,
     bodyJson,
     durationMs: response.durationMs,

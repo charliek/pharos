@@ -106,12 +106,24 @@ function resolveRequest(step: ScenarioStep, ctx: VariableContext): HttpRequestSp
         Object.entries(request.headers).map(([key, value]) => [key, substituteText(value, ctx)]),
       )
     : undefined;
+  // A form is urlencoded, so every value ends up a string anyway — substitute
+  // like a header rather than preserving the resolved variable's type.
+  const form = request.form
+    ? Object.fromEntries(
+        Object.entries(request.form).map(([key, value]) => [
+          key,
+          typeof value === 'string' ? substituteText(value, ctx) : value,
+        ]),
+      )
+    : undefined;
   return {
     method: request.method,
     path: substituteText(request.path, ctx),
     query,
     headers,
     body: request.body === undefined ? undefined : substituteValue(request.body, ctx),
+    form,
+    followRedirects: request.follow_redirects,
     timeoutMs: request.timeoutMs,
   };
 }

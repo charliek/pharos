@@ -298,6 +298,7 @@ request:
     displayName: Test User
   # form: { grant_type: authorization_code }  # urlencoded; mutually exclusive with body (Section 9.6)
   follow_redirects: true            # optional, default true — see the pitfall in Section 9.3
+                                    #   (on-disk name; `followRedirects` in memory, Section 9.3)
   timeoutMs: 5000                   # optional per-request timeout override
 ```
 
@@ -849,6 +850,8 @@ OPTIONS and HEAD are supported alongside GET/POST/PUT/PATCH/DELETE — required 
 
 Requests gain a `follow_redirects: boolean` field, **default `true`** (today's behavior — `fetch`'s default `redirect: 'follow'`). When `false`, the client sets `redirect: 'manual'`; the 30x response itself (status plus `location` header) becomes the step's response — extractable and comparable like any other response.
 
+**Spelling.** `follow_redirects` is the **on-disk** scenario field (snake_case, the portable vocabulary of Section 4.6); the **in-memory** `HttpRequestSpec` field is `followRedirects`, camelCase like every other in-memory field (`bodyText`, `durationMs`, `setCookie`). The step runner maps `follow_redirects` → `followRedirects` when it resolves a step's request, the same explicit mapping the recording writer/reader performs for `setCookie` ⇄ `set_cookie` (Section 9.2). `form`, `query`, `headers`, and `body` need no mapping — their names are identical on both sides.
+
 **Pitfall:** with `follow_redirects: true`, intermediate 30x hops are **invisible** to both the cookie jar (Section 9.5) and comparison/extraction — `fetch` follows them internally and only the final response is observed. A flow that needs to inspect, extract from, or apply cookies set by an intermediate hop **must** set `follow_redirects: false` on that step and walk the chain manually, one step per hop, replaying the extracted `Location` as the next step's `path` (Section 9.4). This is the common shape of an OAuth-style authorize redirect chain, and it is the most likely authoring mistake — the scaffold README (Section 19.2) repeats this warning.
 
 ### 9.4 Absolute-URL paths and cross-origin replay
@@ -876,7 +879,7 @@ export interface HttpRequestSpec {
   headers?: Record<string, string>;
   body?: unknown;
   form?: Record<string, string | number | boolean>;   // mutually exclusive with body (Section 9.6)
-  follow_redirects?: boolean;                          // default true (Section 9.3)
+  followRedirects?: boolean;       // default true; on-disk spelling is follow_redirects (Section 9.3)
   timeoutMs?: number;
 }
 
@@ -917,6 +920,8 @@ export interface Recording {
 Example path: `fixtures/recordings/users/get-user-success/get-user.json`.
 
 `response` is validated on disk against `recordingResponseSchema`, not `HttpResponseRecord` directly: the on-disk `set_cookie` field is optional and snake_case, versus the in-memory `setCookie`, which is required. See Section 9's `HttpResponseRecord` model for the full required-vs-optional mapping and why pre-existing recordings have no cookie data.
+
+The recorded **request** is informational — replay re-sends the scenario's freshly substituted request, never the recorded one (Section 10.3) — so `form` and `followRedirects` are **not** persisted into a recording: form values routinely carry credentials the redaction discipline (Section 10.2) has no rule for, and the redirect mode is a send-time knob with nothing to replay against.
 
 ### 10.2 Recording safety
 

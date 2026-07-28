@@ -37,11 +37,13 @@ steps:
   - id: get-user
     name: Fetch user by id          # optional
     request:
-      method: GET                    # GET | POST | PUT | PATCH | DELETE
-      path: /users/{{ variables.userId }}
+      method: GET                    # GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD
+      path: /users/{{ variables.userId }}   # absolute URL allowed iff same-origin
       query: { includeDetails: true }
       headers: { authorization: "Bearer {{ env.AUTH_TOKEN }}" }
       body: { ... }                  # object → JSON; string → sent verbatim
+      form: { grant_type: ... }      # urlencoded; mutually exclusive with body
+      follow_redirects: true         # default true; false returns the 30x itself
       timeoutMs: 5000                # optional per-request override
     extract:
       userId: { from: new.body, path: $.id }
@@ -53,10 +55,19 @@ steps:
     compare: { ... }                 # see comparison strategies
 ```
 
+OPTIONS and HEAD must not set `body` or `form` (a validation error): bodies on
+those methods are unreliable across HTTP implementations. With
+`follow_redirects: true` (the default) intermediate 30x hops are invisible — walk
+a redirect chain one step per hop with `follow_redirects: false`, replaying the
+extracted `Location` as the next step's `path`.
+
 Extraction `from` is one of `legacy.body`, `new.body`, `response.body`,
-`legacy.headers`, `new.headers`, `response.headers`. Body extraction uses the
-JSONPath subset; header extraction uses a header name. `response.*` is only valid
-in single-target modes.
+`legacy.headers`, `new.headers`, `response.headers`, `legacy.set_cookie`,
+`new.set_cookie`, `response.set_cookie`. Body extraction uses the JSONPath
+subset; header extraction uses a header name; `*.set_cookie` extraction uses a
+cookie **name** and yields that cookie's value from the lossless multi-value
+capture (last occurrence wins; attributes are never extracted). `response.*` is
+only valid in single-target modes.
 
 ## Comparison strategies
 

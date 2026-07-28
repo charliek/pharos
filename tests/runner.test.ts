@@ -581,3 +581,66 @@ steps:
     expect(result.pass).toBe(true);
   });
 });
+
+describe('runScenario — manual redirect chain', () => {
+  it('walks a 30x hop by hop, replaying the Location and a captured cookie', async () => {
+    newServer = await startTestServer((req, res) => {
+      if (req.url === '/start') {
+        res.statusCode = 302;
+        res.setHeader('location', `${newServer?.url}/token?hop=1`);
+        res.setHeader('set-cookie', ['csrf=c1; Path=/', 'sid=s1; Path=/; HttpOnly']);
+        res.end();
+        return;
+      }
+      replyJson(res, 200, { ok: true });
+    });
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: oauth.chain
+name: chain
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: authorize
+    request:
+      method: GET
+      path: /start
+      follow_redirects: false
+    extract:
+      nextHop:
+        from: response.headers
+        path: location
+      sid:
+        from: response.set_cookie
+        path: sid
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 302
+  - id: token
+    request:
+      method: POST
+      path: "{{ variables.nextHop }}"
+      form:
+        grant_type: authorization_code
+        session: "{{ variables.sid }}"
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+    // The 30x was observed rather than followed, so the chain is two requests.
+    expect(newServer.requests.map((r) => r.url)).toEqual(['/start', '/token?hop=1']);
+    const token = newServer.requests[1];
+    expect(token.headers['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(Object.fromEntries(new URLSearchParams(token.body))).toEqual({
+      grant_type: 'authorization_code',
+      session: 's1',
+    });
+  });
+});

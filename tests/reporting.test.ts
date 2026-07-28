@@ -48,6 +48,7 @@ describe('buildReport', () => {
               legacy: {
                 status: 200,
                 headers: { authorization: 'Bearer SECRET' },
+                setCookie: [],
                 bodyText: '{"token":"SECRET"}',
                 bodyJson: { token: 'SECRET' },
                 durationMs: 1,
@@ -55,6 +56,7 @@ describe('buildReport', () => {
               candidate: {
                 status: 200,
                 headers: {},
+                setCookie: [],
                 bodyText: '{}',
                 bodyJson: {},
                 durationMs: 1,

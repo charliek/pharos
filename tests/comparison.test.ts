@@ -8,7 +8,14 @@ function resp(
   json: unknown,
   headers: Record<string, string> = {},
 ): HttpResponseRecord {
-  return { status, headers, bodyText: JSON.stringify(json), bodyJson: json, durationMs: 1 };
+  return {
+    status,
+    headers,
+    setCookie: [],
+    bodyText: JSON.stringify(json),
+    bodyJson: json,
+    durationMs: 1,
+  };
 }
 
 function rulesWith(patch: Partial<ComparisonRules>): ComparisonRules {

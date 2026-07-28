@@ -31,6 +31,11 @@ configured secret JSON paths are masked, and query params are masked. Because
 plain-text and scalar bodies cannot be path-redacted, they are not persisted —
 only JSON object/array bodies are recorded and replayable.
 
+Captured `Set-Cookie` headers follow the same discipline: they are written to the
+recording's optional `set_cookie` field **only** when `set-cookie` is listed in
+`safe_headers`. A recording without that field replays with no cookie data (true
+of every fixture written before cookie capture existed) — re-record to add it.
+
 ## Replay
 
 A `replay_against_recording` scenario loads the recorded **response** as the

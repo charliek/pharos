@@ -1,14 +1,17 @@
 import { z } from 'zod';
 import { JsonPathError, parseJsonPath } from '../comparison/jsonpath';
 import { jsonNormalizationSchema, jsonPathSchema } from '../comparison/rules';
+import { BODYLESS_METHODS, HTTP_METHODS, type HttpMethod } from '../execution/http-client';
 
 /**
- * Request methods (spec Sections 4.6 and 9). Note this is narrower than the
- * contract's `match.methods`, which also allows HEAD: a contract route may match
- * read traffic Limen shadows, but a Pharos scenario always *issues* one of these.
+ * Request methods a scenario may issue (spec Sections 4.6 and 9.1) — the client's
+ * list, so a scenario can never name a method the client cannot send. OPTIONS and
+ * HEAD are here for CORS-preflight and HEAD scenarios; both forbid a `body` and
+ * a `form` (enforced below, and again defensively in the client). The contract's
+ * `match.methods` is a separate, Limen-shared list — the two need not coincide.
  */
-export const REQUEST_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
-export type RequestMethod = (typeof REQUEST_METHODS)[number];
+export const REQUEST_METHODS = HTTP_METHODS;
+export type RequestMethod = HttpMethod;
 const requestMethodSchema = z.enum(REQUEST_METHODS);
 
 /** Add a field-addressed issue when `value` is not a supported JSONPath. */
@@ -73,9 +76,33 @@ const requestSchema = z
     query: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
     headers: z.record(z.string()).optional(),
     body: z.unknown().optional(),
+    // Urlencoded body (spec Section 9.6); `follow_redirects` defaults to true
+    // (spec Section 9.3) — both snake_case on disk, camelCase in the client.
+    form: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    follow_redirects: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, ctx) => {
+    if (request.body !== undefined && request.form !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['form'],
+        message: 'request.body and request.form are mutually exclusive — pick one body encoding',
+      });
+    }
+    if (BODYLESS_METHODS.has(request.method)) {
+      for (const field of ['body', 'form'] as const) {
+        if (request[field] !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `method ${request.method} must not set request.${field} (bodies on OPTIONS/HEAD are unreliable across HTTP implementations)`,
+          });
+        }
+      }
+    }
+  });
 
 const EXTRACT_SOURCES = [
   'legacy.body',
@@ -84,6 +111,9 @@ const EXTRACT_SOURCES = [
   'legacy.headers',
   'new.headers',
   'response.headers',
+  'legacy.set_cookie',
+  'new.set_cookie',
+  'response.set_cookie',
 ] as const;
 const extractRuleSchema = z
   .object({
@@ -92,7 +122,8 @@ const extractRuleSchema = z
   })
   .strict()
   .superRefine((rule, ctx) => {
-    // Body extraction uses a JSONPath (subset); header extraction uses a header name.
+    // Body extraction uses a JSONPath (subset); header extraction uses a header
+    // name; set_cookie extraction uses a cookie name (spec Section 4.6).
     if (rule.from.endsWith('.body')) {
       addJsonPathIssue(ctx, ['path'], rule.path);
     }
