@@ -46,10 +46,35 @@ Scenarios may be skipped (not failed) by a safety gate:
 - **Destructive** scenarios run only with `ALLOW_DESTRUCTIVE_TESTS=true`.
 - Scenarios with `requiresProductionGuardOverride` need
   `ALLOW_PRODUCTION_GUARD_OVERRIDE=true`.
-- `allowedEnvironments` is honored against `output_mode`.
+- `allowedEnvironments` is honored against the config's `environment` field
+  (`local`/`ci`/`staging`/`production`, default `local`) — **not**
+  `output_mode`, which governs reporting/recording conventions only.
 
 A skipped scenario imposes no base-URL requirement, so a guarded scenario does
-not force config it never uses.
+not force config it never uses. A skip counts only under the `skipped`
+summary counter — never `passed` — and never fails the run by itself.
+
+### `environment: production` is fail-closed
+
+Outside `environment: production`, an environment mismatch is a skip as
+above. In `environment: production`, the same mismatch is a **refusal**
+instead: a scenario runs only if `safety.allowedEnvironments` explicitly
+includes `production`; every other scenario becomes a distinct **failing**
+result (`pass: false`, `skipped: false`, a rendered reason) that contributes
+to a non-zero exit code — refusals never skip, skips never fail. Tag a
+scenario with the full environment list
+(`allowedEnvironments: [local, ci, staging, production]`) if it is genuinely
+safe everywhere; tagging it `[production]` alone makes it skip (not fail)
+everywhere else. The destructive opt-in and production guard override above
+still apply on top of the refusal check — the gates compose.
+
+### `production_url_patterns`
+
+`production_url_patterns` (config, e.g. `["*.example.com"]`) guards against
+pointing a non-production run at a production host: if any configured base
+URL's lowercase hostname matches a pattern while `environment != production`,
+`run`/`record` abort with a config error before any request is issued.
+`validate` never sends a request, so the guard doesn't apply there.
 
 ## In CI
 

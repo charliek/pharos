@@ -63,3 +63,86 @@ export function assertConfigForModes(config: PharosConfig, modes: Iterable<Scena
     throw new ConfigError(problems);
   }
 }
+
+/** Escape regex metacharacters other than the glob wildcard itself. */
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** `*`-wildcard glob match against a lowercased hostname (spec Section 6.2/12). */
+function hostnameMatchesGlob(hostname: string, pattern: string): boolean {
+  const regex = new RegExp(`^${pattern.split('*').map(escapeRegExpLiteral).join('.*')}$`, 'i');
+  return regex.test(hostname);
+}
+
+/**
+ * `URL.hostname` wraps an IPv6 literal in brackets (`[2001:db8::1]`); strip
+ * them so a pattern written in the conventional unbracketed form
+ * (`2001:db8::1`, `2001:db8::*`) matches.
+ */
+function stripIPv6Brackets(hostname: string): string {
+  if (hostname.length >= 2 && hostname.startsWith('[') && hostname.endsWith(']')) {
+    return hostname.slice(1, -1);
+  }
+  return hostname;
+}
+
+/**
+ * `production_url_patterns` guard (spec Section 6.2/12): if any configured base
+ * URL's hostname matches a configured pattern while `environment != production`,
+ * abort before any request is issued. Also defensively rejects empty pattern
+ * strings, regardless of environment. Wired into the `run`/`record` paths
+ * (wherever {@link assertConfigForModes} runs) — `validate` never sends a
+ * request, so it doesn't need this guard.
+ */
+export function assertProductionUrlGuard(config: PharosConfig): void {
+  const patterns = config.production_url_patterns ?? [];
+  const problems: string[] = [];
+
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string' || pattern.trim().length === 0) {
+      problems.push(
+        `production_url_patterns entries must be non-empty strings (got ${JSON.stringify(pattern)})`,
+      );
+    }
+  }
+  if (problems.length > 0) {
+    throw new ConfigError(problems);
+  }
+
+  if (config.environment === 'production' || patterns.length === 0) return;
+
+  const candidates: Array<[field: string, url: string | undefined]> = [
+    ['legacy_base_url', config.legacy_base_url],
+    ['new_base_url', config.new_base_url],
+  ];
+
+  for (const [field, url] of candidates) {
+    if (!url) continue;
+    let hostname: string;
+    try {
+      hostname = stripIPv6Brackets(new URL(url).hostname.toLowerCase());
+    } catch {
+      // Fail closed: an unparseable base URL can't be verified as production-safe,
+      // so treat it as a problem rather than silently skipping the check.
+      problems.push(
+        `${field} '${url}' could not be parsed as a URL; refusing to run without being able ` +
+          'to verify it against production_url_patterns',
+      );
+      continue;
+    }
+    for (const pattern of patterns) {
+      if (hostnameMatchesGlob(hostname, pattern)) {
+        problems.push(
+          `${field} '${url}' (hostname '${hostname}') matches production_url_patterns entry ` +
+            `'${pattern}' but environment is '${config.environment}', not 'production' — ` +
+            'refusing to run against a likely production host outside the production profile',
+        );
+      }
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new ConfigError(problems);
+  }
+}

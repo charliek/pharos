@@ -256,7 +256,7 @@ async function runRecordStep(
     scenarioId: scenario.id,
     stepId: step.id,
     recordedAt: new Date().toISOString(),
-    environment: config.output_mode,
+    environment: config.environment,
     request: sentSpec,
     response: legacy,
     safeHeaders: step.recording.safe_headers ?? [],

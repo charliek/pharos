@@ -1,0 +1,12 @@
+version: 1
+id: env.non-production
+name: tagged for local/ci/staging only
+service: s
+tags: [read]
+mode: compare_live
+safety:
+  allowedEnvironments: [local, ci, staging]
+steps:
+  - id: get
+    request: { method: GET, path: /ok }
+    compare: { strategy: json_semantic, status: same }

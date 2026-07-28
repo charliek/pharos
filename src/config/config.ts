@@ -32,6 +32,19 @@ export interface PharosConfig {
   default_timeout_ms: number;
   default_headers: Record<string, string>;
   output_mode: 'local' | 'ci';
+  /**
+   * The safety-relevant environment this run targets (spec Section 6.2).
+   * Compared against scenario `safety.allowedEnvironments` (Section 4.5) —
+   * independent of `output_mode`, which governs reporting/recording
+   * conventions only. See Section 12 for the `production` fail-closed profile.
+   */
+  environment: 'local' | 'ci' | 'staging' | 'production';
+  /**
+   * Host globs (e.g. `*.example.com`) matched against the lowercase hostname
+   * only of each configured base URL. A match while `environment !=
+   * production` aborts the run before any request (spec Section 12).
+   */
+  production_url_patterns: string[];
   allow_destructive_tests: boolean;
   /** Additional guard required to run scenarios marked requiresProductionGuardOverride. */
   allow_production_guard_override: boolean;
@@ -56,6 +69,8 @@ export function defaultConfig(): PharosConfig {
     default_timeout_ms: 10_000,
     default_headers: {},
     output_mode: 'local',
+    environment: 'local',
+    production_url_patterns: [],
     allow_destructive_tests: false,
     allow_production_guard_override: false,
     allow_recording_updates: false,
@@ -87,6 +102,8 @@ const configFileSchema = z
     default_timeout_ms: z.number().int().positive().optional(),
     default_headers: z.record(z.string()).optional(),
     output_mode: z.enum(['local', 'ci']).optional(),
+    environment: z.enum(['local', 'ci', 'staging', 'production']).optional(),
+    production_url_patterns: z.array(z.string().min(1)).optional(),
     allow_destructive_tests: z.boolean().optional(),
     allow_production_guard_override: z.boolean().optional(),
     allow_recording_updates: z.boolean().optional(),

@@ -1,4 +1,12 @@
+import { ConfigError } from '../errors';
 import type { ConfigOverride } from './config';
+
+const VALID_ENVIRONMENTS = ['local', 'ci', 'staging', 'production'] as const;
+type Environment = (typeof VALID_ENVIRONMENTS)[number];
+
+function isValidEnvironment(value: string): value is Environment {
+  return (VALID_ENVIRONMENTS as readonly string[]).includes(value);
+}
 
 /** Parse a boolean-ish env value; returns undefined when unset/unrecognized. */
 function parseBool(value: string | undefined): boolean | undefined {
@@ -15,6 +23,12 @@ function parseBool(value: string | undefined): boolean | undefined {
  * Project the recognized Pharos environment variables (spec Section 6.2) into a
  * config override. Only set keys are returned, so this layers cleanly over the
  * config file and under CLI arguments.
+ *
+ * `PHAROS_ENVIRONMENT` is safety-relevant (Section 12), so an unrecognized
+ * value throws {@link ConfigError} naming the value and the valid options
+ * rather than silently falling back to the `local` default (fail-closed:
+ * `PHAROS_ENVIRONMENT=prod` must not quietly become `local`). Surrounding
+ * whitespace is trimmed before validation.
  */
 export function configFromEnv(env: NodeJS.ProcessEnv): ConfigOverride {
   const out: ConfigOverride = {};
@@ -31,6 +45,16 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ConfigOverride {
   }
   if (env.PHAROS_MODE === 'local' || env.PHAROS_MODE === 'ci') {
     out.output_mode = env.PHAROS_MODE;
+  }
+  if (env.PHAROS_ENVIRONMENT !== undefined) {
+    const trimmed = env.PHAROS_ENVIRONMENT.trim();
+    if (!isValidEnvironment(trimmed)) {
+      throw new ConfigError([
+        `PHAROS_ENVIRONMENT must be one of ${VALID_ENVIRONMENTS.join(', ')} ` +
+          `(got ${JSON.stringify(env.PHAROS_ENVIRONMENT)})`,
+      ]);
+    }
+    out.environment = trimmed;
   }
 
   const destructive = parseBool(env.ALLOW_DESTRUCTIVE_TESTS);
