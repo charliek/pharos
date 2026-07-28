@@ -129,7 +129,7 @@ function buildHeaders(
 
 /**
  * Refuse a request whose body cannot be shaped as specified. The scenario schema
- * rejects both cases at load time; this is the client's defensive net for a spec
+ * rejects these cases at load time; this is the client's defensive net for a spec
  * that did not come from a validated scenario.
  */
 function assertRequestShape(spec: HttpRequestSpec): void {
@@ -143,6 +143,15 @@ function assertRequestShape(spec: HttpRequestSpec): void {
     throw new RequestShapeError(
       `method ${spec.method} must not carry a body or form (spec Section 9.1)`,
     );
+  }
+  // A GET `form` reaches `applyBody` and lands on `fetch` with a body on a
+  // method whose semantics have no body — `fetch` throws a confusing
+  // network-layer error instead of a clear one, and a GET form has no
+  // meaning to begin with (spec Sections 9.1 and 9.6). `body` on GET is left
+  // alone deliberately: it is pre-existing, silently-ignored behavior
+  // (`applyBody` skips it for GET) that this fix does not touch.
+  if (spec.form !== undefined && spec.method === 'GET') {
+    throw new RequestShapeError('method GET must not carry a form body (spec Section 9.6)');
   }
 }
 

@@ -170,6 +170,16 @@ function compareDimensions(
 }
 
 /**
+ * Header names a custom comparator's view must never see raw, regardless of
+ * what the scenario configured as `sensitiveHeaders` — mirrors
+ * `reporting/artifacts.ts`'s `ALWAYS_REDACTED_HEADERS`. `set-cookie` carries
+ * session secrets the cookie jar put on the wire; `cookie` would too if it
+ * ever surfaced in a response. Unioned in rather than replacing the
+ * configured list.
+ */
+const ALWAYS_REDACTED_COMPARATOR_HEADERS = ['set-cookie', 'cookie'];
+
+/**
  * A redacted view of a response for a custom comparator: secret JSON paths and
  * sensitive headers are masked so a comparator cannot surface them into a
  * mismatch (and from there into a report).
@@ -183,14 +193,18 @@ function redactedView(
     response.bodyJson !== undefined
       ? redactJsonValue(response.bodyJson, rules.json.redact_paths)
       : undefined;
-  // Set-Cookie values are secrets, so the redacted view masks each captured
-  // header wholesale when set-cookie is sensitive; attribute-level cookie
-  // redaction arrives with the set_cookie comparison dimension (Section 8.6).
-  const cookiesSensitive = sensitiveHeaders.some((name) => asciiLower(name) === 'set-cookie');
+  // Set-Cookie values are secrets, so the comparator view masks every
+  // captured entry unconditionally — a scenario's `sensitiveHeaders` config
+  // must never be able to leave a custom comparator with a raw cookie value.
+  // Attribute-level cookie redaction arrives separately with the set_cookie
+  // comparison dimension (Section 8.6).
+  const safeSensitiveHeaders = [
+    ...new Set([...sensitiveHeaders, ...ALWAYS_REDACTED_COMPARATOR_HEADERS]),
+  ];
   return {
     status: response.status,
-    headers: redactHeaders(response.headers, sensitiveHeaders),
-    setCookie: cookiesSensitive ? response.setCookie.map(() => REDACTED) : response.setCookie,
+    headers: redactHeaders(response.headers, safeSensitiveHeaders),
+    setCookie: response.setCookie.map(() => REDACTED),
     bodyText: bodyJson !== undefined ? JSON.stringify(bodyJson) : response.bodyText,
     bodyJson,
     durationMs: response.durationMs,

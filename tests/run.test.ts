@@ -145,6 +145,24 @@ describe('runProject — the run pipeline', () => {
     expect(newServer.requests).toHaveLength(0);
   });
 
+  it('mentions the parse failure when --scenario names a file that failed to parse', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    const brokenDir = resolve(here, 'fixtures/run-parse-failure/scenarios');
+    try {
+      await runProject(config({ scenario_dir: brokenDir }), { scenarioId: 'run.broken' });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      const message = (error as ConfigError).message;
+      expect(message).toContain('run.broken');
+      expect(message).toMatch(/parse/i);
+    }
+    // Fail-closed before any request work, same as the other accounting-hole cases.
+    expect(legacyServer.requests).toHaveLength(0);
+    expect(newServer.requests).toHaveLength(0);
+  });
+
   it('still runs normally when --scenario is named and no tag filter conflicts with it', async () => {
     legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
     newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));

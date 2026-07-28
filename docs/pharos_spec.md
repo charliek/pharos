@@ -302,7 +302,7 @@ request:
   timeoutMs: 5000                   # optional per-request timeout override
 ```
 
-OPTIONS and HEAD requests must not set `body` or `form` — a validation error (Section 9.1).
+OPTIONS and HEAD requests must not set `body` or `form` — a validation error (Section 9.1). GET requests must not set `form` either — a GET form has no meaning — also a validation error (Section 9.6); `body` on GET is unaffected and remains silently ignored by the client.
 
 ### Cookie jar (`cookies: true`)
 
@@ -890,7 +890,7 @@ See "Cookie jar (`cookies: true`)" in Section 4.6 for the scenario-level opt-in,
 
 ### 9.6 Form bodies
 
-A step may set `form: Record<string, string | number | boolean>` instead of `body`. The client urlencodes it (`application/x-www-form-urlencoded`, unless a `content-type` header is already set) and sends it as the request body. `form` and `body` are **mutually exclusive** on a request — specifying both is a validation error.
+A step may set `form: Record<string, string | number | boolean>` instead of `body`. The client urlencodes it (`application/x-www-form-urlencoded`, unless a `content-type` header is already set) and sends it as the request body. `form` and `body` are **mutually exclusive** on a request — specifying both is a validation error. `form` is also forbidden on `GET` (a validation error, like OPTIONS/HEAD in Section 9.1) since a GET form has no meaning; `body` on `GET` is left as-is (silently ignored by the client).
 
 Internal models:
 

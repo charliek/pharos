@@ -57,10 +57,12 @@ jobs:
   # merged yet, the files won't exist on Limen's main — that's a "not
   # present yet" state, not drift, so the job warns and passes. Once Limen
   # main has the files, any byte difference is a real lockstep break and
-  # fails the job. A 401/403 from the API (as opposed to a 404) means the
-  # token can't even see the file, which is not evidence of bootstrap — that
-  # case fails loudly instead, so a token/permissions problem is never
-  # mistaken for "not merged yet".
+  # fails the job. A 404 on a per-file contents path only counts as bootstrap
+  # once the repo itself is confirmed readable (a separate probe below) — a
+  # token that cannot see charliek/limen at all *also* gets a 404 from the
+  # contents API, indistinguishable from "not merged yet" unless checked
+  # separately, so a token/permissions problem is never mistaken for
+  # bootstrap.
   lockstep-twin:
     runs-on: ubuntu-latest
     steps:
@@ -78,6 +80,24 @@ jobs:
           set -euo pipefail
 
           fail=0
+
+          # Probe the repo itself before the per-file loop. A 404 from the
+          # per-file contents endpoint below is only meaningful as "bootstrap
+          # window" (the limen PR hasn't merged yet) when we already know the
+          # repo is visible to this token; if charliek/limen ever went
+          # private (or the token otherwise can't see it), the contents API
+          # 404s on every path too, which would otherwise be silently
+          # tolerated as bootstrap and defeat the whole drift gate. So an
+          # inaccessible repo hard-fails here, before any per-file check.
+          repo_err="$(mktemp)"
+          if ! gh api repos/charliek/limen > /dev/null 2> "$repo_err"; then
+            echo "::error::Could not read charliek/limen: access denied (or the repo does not exist / is not visible to this token). The default GITHUB_TOKEN cannot read another private repo. Add a PAT with read access to charliek/limen as the 'LOCKSTEP_TOKEN' repo secret."
+            cat "$repo_err"
+            rm -f "$repo_err"
+            exit 1
+          fi
+          rm -f "$repo_err"
+
           for f in lockstep.contract.yaml decisions.json; do
             local_path="tests/fixtures/lockstep/${f}"
             remote_path="tests/lockstep/${f}"
@@ -95,14 +115,10 @@ jobs:
                 rm -f "$tmp" "${tmp}.err"
                 continue
               fi
-              if grep -qE '401|403|Forbidden|Bad credentials' "${tmp}.err"; then
-                echo "::error::Could not read charliek/limen ${remote_path}: access denied. The default GITHUB_TOKEN cannot read another private repo. Add a PAT with read access to charliek/limen as the 'LOCKSTEP_TOKEN' repo secret."
-                cat "${tmp}.err"
-                fail=1
-                rm -f "$tmp" "${tmp}.err"
-                continue
-              fi
-              echo "::error::gh api call for ${remote_path} failed unexpectedly:"
+              # The repo probe above already confirmed charliek/limen is
+              # readable, so a failure here (401/403/anything else) is not a
+              # bootstrap 404 — fail loudly.
+              echo "::error::gh api call for ${remote_path} failed unexpectedly (charliek/limen is readable, so this is not a bootstrap 404):"
               cat "${tmp}.err"
               fail=1
               rm -f "$tmp" "${tmp}.err"

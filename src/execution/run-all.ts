@@ -156,13 +156,24 @@ export async function runProject(
   // yielding a false green (0 scenarios, exit 0). If the caller named a
   // scenario and, after filtering, it isn't in the run set, fail loudly
   // instead of reporting nothing for it. Applies in every environment.
+  //
+  // A second accounting hole: the file `--scenario` names might be exactly
+  // the one that failed to *parse* — its id was never even extracted, so
+  // `requestedScenarioParsed` stays false and this would otherwise be
+  // reported as an indistinguishable "no such scenario id", masking the real
+  // parse failure the caller actually needs to see. When any file failed to
+  // parse, surface that detail alongside (or instead of) the generic message.
   if (options.scenarioId && !selected.some((entry) => entry.scenario.id === options.scenarioId)) {
-    throw new ConfigError([
-      requestedScenarioParsed
-        ? `--scenario '${options.scenarioId}' matched a scenario file but was filtered out ` +
-          'by --include-tag/--exclude-tag (or the active modes) — nothing would be reported for it'
-        : `--scenario '${options.scenarioId}' did not match any scenario id under ${config.scenario_dir}`,
-    ]);
+    const reason = requestedScenarioParsed
+      ? `--scenario '${options.scenarioId}' matched a scenario file but was filtered out ` +
+        'by --include-tag/--exclude-tag (or the active modes) — nothing would be reported for it'
+      : loadFailures.length > 0
+        ? `--scenario '${options.scenarioId}' did not match any successfully-parsed scenario id ` +
+          `under ${config.scenario_dir}, and ${loadFailures.length} scenario file` +
+          `${loadFailures.length === 1 ? '' : 's'} failed to parse — it may be one of these: ` +
+          loadFailures.map((failure) => `${failure.scenarioId} (${failure.error})`).join('; ')
+        : `--scenario '${options.scenarioId}' did not match any scenario id under ${config.scenario_dir}`;
+    throw new ConfigError([reason]);
   }
 
   // Apply safety gates before requiring config: a skipped or refused scenario

@@ -110,6 +110,19 @@ const requestSchema = z
         }
       }
     }
+    // A GET `form` has no meaning (there is no urlencoded-body sense for a
+    // method that carries its data in the query string) and would otherwise
+    // reach the client and `fetch` as a body on GET, producing a confusing
+    // network-layer error (spec Sections 9.1 and 9.6). `body` on GET is left
+    // alone — pre-existing, silently-ignored behavior — this only targets
+    // `form`.
+    if (request.method === 'GET' && request.form !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['form'],
+        message: 'method GET must not set request.form (a GET form has no meaning)',
+      });
+    }
   });
 
 const EXTRACT_SOURCES = [
