@@ -45,17 +45,98 @@ jobs:
       - name: Validate scenarios and contracts
         run: bun run ftest -- validate
 
+  # Lockstep-twin check (D6/D13): the shared behavioral-vocabulary fixture
+  # (tests/fixtures/lockstep/{lockstep.contract.yaml,decisions.json}) is
+  # committed byte-identically in both Pharos and Limen, since it's the one
+  # thing pinning that the two engines resolve merge/comparison semantics
+  # the same way. A same-repo hash can't catch the twin going stale on the
+  # *other* side, so this job fetches Limen main's copy of each file and
+  # byte-compares it against ours.
+  #
+  # Bootstrap tolerance: while the Limen PR that adds these files hasn't
+  # merged yet, the files won't exist on Limen's main — that's a "not
+  # present yet" state, not drift, so the job warns and passes. Once Limen
+  # main has the files, any byte difference is a real lockstep break and
+  # fails the job. A 401/403 from the API (as opposed to a 404) means the
+  # token can't even see the file, which is not evidence of bootstrap — that
+  # case fails loudly instead, so a token/permissions problem is never
+  # mistaken for "not merged yet".
+  lockstep-twin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Compare fixture twins against limen main
+        env:
+          # Prefer a PAT with cross-repo read access if one is configured;
+          # the default GITHUB_TOKEN is scoped to this repo only and cannot
+          # be assumed to read another private repo.
+          GH_TOKEN: ${{ secrets.LOCKSTEP_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          fail=0
+          for f in lockstep.contract.yaml decisions.json; do
+            local_path="tests/fixtures/lockstep/${f}"
+            remote_path="tests/lockstep/${f}"
+            tmp="$(mktemp)"
+
+            status=0
+            gh api \
+              -H "Accept: application/vnd.github.raw" \
+              "repos/charliek/limen/contents/${remote_path}?ref=main" \
+              > "$tmp" 2> "${tmp}.err" || status=$?
+
+            if [ "$status" -ne 0 ]; then
+              if grep -qE '404|Not Found' "${tmp}.err"; then
+                echo "::warning::limen main has no ${remote_path} yet (bootstrap window before the limen PR merges) — skipping twin compare for ${f}."
+                rm -f "$tmp" "${tmp}.err"
+                continue
+              fi
+              if grep -qE '401|403|Forbidden|Bad credentials' "${tmp}.err"; then
+                echo "::error::Could not read charliek/limen ${remote_path}: access denied. The default GITHUB_TOKEN cannot read another private repo. Add a PAT with read access to charliek/limen as the 'LOCKSTEP_TOKEN' repo secret."
+                cat "${tmp}.err"
+                fail=1
+                rm -f "$tmp" "${tmp}.err"
+                continue
+              fi
+              echo "::error::gh api call for ${remote_path} failed unexpectedly:"
+              cat "${tmp}.err"
+              fail=1
+              rm -f "$tmp" "${tmp}.err"
+              continue
+            fi
+            rm -f "${tmp}.err"
+
+            if ! cmp -s "$local_path" "$tmp"; then
+              echo "::error::Lockstep twin drift: pharos ${local_path} differs from limen ${remote_path} on main. Both copies must be updated together — see docs/pharos_spec.md Section 13 and the lockstep fixture header comment."
+              diff -u "$local_path" "$tmp" || true
+              fail=1
+            else
+              echo "OK: ${local_path} matches limen ${remote_path}"
+            fi
+            rm -f "$tmp"
+          done
+
+          exit "$fail"
+
   # Single required status check the branch ruleset can gate on. Keeping it a
   # separate aggregator job means the required check name stays stable even if
   # build-test later fans out into a matrix.
   ci-success:
-    needs: [build-test]
+    needs: [build-test, lockstep-twin]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Require build-test to have passed
+      - name: Require build-test and lockstep-twin to have passed
         run: |
           if [ "${{ needs.build-test.result }}" != "success" ]; then
             echo "::error::build-test concluded '${{ needs.build-test.result }}'"
+            exit 1
+          fi
+          if [ "${{ needs.lockstep-twin.result }}" != "success" ]; then
+            echo "::error::lockstep-twin concluded '${{ needs.lockstep-twin.result }}'"
             exit 1
           fi
