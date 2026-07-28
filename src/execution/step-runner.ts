@@ -6,12 +6,14 @@ import { inlineComparisonRules } from '../contract/merge';
 import { ValidationError } from '../errors';
 import { writeFailureArtifacts } from '../reporting/artifacts';
 import type { Scenario, ScenarioStep } from '../scenarios/schema';
+import type { CookieJar } from './cookies';
 import { buildRecording, loadRecording, recordingResponse, writeRecording } from './fixtures';
-import type {
-  HttpClientOptions,
-  HttpRequestSpec,
-  HttpResponseRecord,
-  sendRequest,
+import {
+  buildUrl,
+  type HttpClientOptions,
+  type HttpRequestSpec,
+  type HttpResponseRecord,
+  type sendRequest,
 } from './http-client';
 import {
   extractValue,
@@ -39,12 +41,20 @@ export interface StepResult {
 
 export type SendFn = typeof sendRequest;
 
+/** The two sides a step can address. */
+export type Target = 'legacy' | 'new';
+
+/** The scenario run's cookie jars, one per target; absent as a whole for `cookies: false`. */
+export type CookieJars = Record<Target, CookieJar>;
+
 export interface StepRunnerDeps {
   send: SendFn;
   /** Custom comparators by name (the hook registry, wired in the hooks phase). */
   comparators?: Record<string, CustomComparator>;
   /** Whether legacy_record steps may write recordings (record command / opt-in). */
   recordingEnabled?: boolean;
+  /** Per-target cookie jars when the scenario set `cookies: true` (spec Section 9.5). */
+  cookieJars?: CookieJars;
 }
 
 /**
@@ -65,7 +75,7 @@ function withConfiguredRedaction(rules: ComparisonRules, config: PharosConfig): 
   };
 }
 
-function clientOptions(side: 'legacy' | 'new', config: PharosConfig): HttpClientOptions {
+function clientOptions(side: Target, config: PharosConfig): HttpClientOptions {
   const baseUrl = side === 'legacy' ? config.legacy_base_url : config.new_base_url;
   if (!baseUrl) {
     // Guarded by assertConfigForModes before a run starts; defensive here.
@@ -128,6 +138,61 @@ function resolveRequest(step: ScenarioStep, ctx: VariableContext): HttpRequestSp
   };
 }
 
+interface SentRequest {
+  /** The spec as actually sent — including a jar-built `Cookie` header, if any. */
+  spec: HttpRequestSpec;
+  response: HttpResponseRecord;
+}
+
+function hasExplicitCookieHeader(headers: Record<string, string> | undefined): boolean {
+  return Object.keys(headers ?? {}).some((name) => name.toLowerCase() === 'cookie');
+}
+
+/**
+ * The absolute URL a spec resolves to, or undefined when it does not resolve at
+ * all (a cross-origin absolute path, which the client refuses). Only the jar
+ * needs this up front — the send itself resolves the URL again and reports the
+ * real error.
+ */
+function resolvedRequestUrl(baseUrl: string, path: string): string | undefined {
+  try {
+    return buildUrl(baseUrl, path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Send one request to one target, wrapping the call in that target's cookie jar
+ * (spec Section 9.5). The jar supplies a `Cookie` header unless the step declared
+ * its own — an explicit header replaces the jar's for sending — and ingests the
+ * response's `Set-Cookie` either way. A manual-redirect 30x is an ordinary
+ * response here, so its cookies land in the jar like any other hop.
+ */
+async function sendToTarget(
+  side: Target,
+  config: PharosConfig,
+  spec: HttpRequestSpec,
+  deps: StepRunnerDeps,
+): Promise<SentRequest> {
+  const options = clientOptions(side, config);
+  const jar = deps.cookieJars?.[side];
+  // Path matching needs the resolved URL, so a path that does not resolve gets
+  // no jar treatment at all.
+  const requestUrl = jar ? resolvedRequestUrl(options.baseUrl, spec.path) : undefined;
+  if (!jar || requestUrl === undefined) {
+    return { spec, response: await deps.send(options, spec) };
+  }
+  let sent = spec;
+  if (!hasExplicitCookieHeader(spec.headers)) {
+    const cookie = jar.cookieHeader(requestUrl);
+    if (cookie) sent = { ...spec, headers: { ...spec.headers, Cookie: cookie } };
+  }
+  const response = await deps.send(options, sent);
+  jar.ingest(response.setCookie, requestUrl);
+  return { spec: sent, response };
+}
+
 function executionFailure(
   step: ScenarioStep,
   message: string,
@@ -171,7 +236,7 @@ async function runRecordStep(
   spec: HttpRequestSpec,
   deps: StepRunnerDeps,
 ): Promise<StepResult> {
-  const legacy = await deps.send(clientOptions('legacy', config), spec);
+  const { spec: sentSpec, response: legacy } = await sendToTarget('legacy', config, spec, deps);
   if (legacy.error) {
     return executionFailure(step, `legacy request failed: ${legacy.error.message}`, legacy);
   }
@@ -192,7 +257,7 @@ async function runRecordStep(
     stepId: step.id,
     recordedAt: new Date().toISOString(),
     environment: config.output_mode,
-    request: spec,
+    request: sentSpec,
     response: legacy,
     safeHeaders: step.recording.safe_headers ?? [],
     redaction: config.redaction,
@@ -225,7 +290,12 @@ export async function runStep(
   }
 
   let legacy: HttpResponseRecord | undefined;
-  let candidate: HttpResponseRecord | undefined;
+  // The new-side send is kept whole because failure artifacts record its `spec`
+  // — the request as actually sent, so a jar-built `Cookie` header shows up
+  // (redacted) instead of being invisible. Artifacts carry one request, as they
+  // always have; with a jar the legacy side differs only in that header. Every
+  // mode must assign it, which is what makes a candidate response guaranteed.
+  let sentNew: SentRequest;
   if (scenario.mode === 'replay_against_recording') {
     if (!step.recording) {
       return executionFailure(step, `step '${step.id}': replay requires a recording fixture`);
@@ -239,19 +309,23 @@ export async function runStep(
     // Send the scenario's request (freshly variable-substituted, so it carries
     // current auth); the recording supplies the legacy *response* to compare
     // against. The recorded request is redacted and so is not replayed.
-    candidate = await deps.send(clientOptions('new', config), spec);
+    sentNew = await sendToTarget('new', config, spec, deps);
   } else if (scenario.mode === 'compare_live') {
-    // Independent reads against the shared store — issue them concurrently.
-    [legacy, candidate] = await Promise.all([
-      deps.send(clientOptions('legacy', config), spec),
-      deps.send(clientOptions('new', config), spec),
+    // Independent reads against the shared store — issue them concurrently. The
+    // two targets have independent jars, so concurrency cannot cross-contaminate.
+    const [legacySent, newSent] = await Promise.all([
+      sendToTarget('legacy', config, spec, deps),
+      sendToTarget('new', config, spec, deps),
     ]);
+    legacy = legacySent.response;
+    sentNew = newSent;
   } else {
     // new_only_assert
-    candidate = await deps.send(clientOptions('new', config), spec);
+    sentNew = await sendToTarget('new', config, spec, deps);
   }
+  const candidate = sentNew.response;
 
-  if (candidate?.error)
+  if (candidate.error)
     return executionFailure(
       step,
       `new request failed: ${candidate.error.message}`,
@@ -270,9 +344,6 @@ export async function runStep(
   const extractionError = applyExtraction(step, ctx, legacy, candidate);
   if (extractionError) return extractionError;
 
-  if (!candidate) {
-    return executionFailure(step, `step '${step.id}': no response available to compare`, legacy);
-  }
   if (!step.compare) {
     return executionFailure(
       step,
@@ -315,7 +386,7 @@ export async function runStep(
       config.report_dir,
       scenario.id,
       step.id,
-      { request: spec, legacy, candidate, diffText: comparison.diffText },
+      { request: sentNew.spec, legacy, candidate, diffText: comparison.diffText },
       config.redaction,
     );
   }

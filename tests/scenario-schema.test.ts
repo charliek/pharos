@@ -68,6 +68,15 @@ steps:
     expect(() => loadScenarioFromText(yaml, 's.yaml')).not.toThrow();
   });
 
+  it('accepts the cookie-jar opt-in and leaves it absent by default', () => {
+    expect(loadScenarioFromText(VALID, 'scenario.yaml').cookies).toBeUndefined();
+    expect(loadScenarioFromText(`${VALID}cookies: true\n`, 'scenario.yaml').cookies).toBe(true);
+  });
+
+  it('rejects a non-boolean cookies field', () => {
+    expect(paths(`${VALID}cookies: yes-please\n`)).toContain('cookies');
+  });
+
   it('allows a contract reference alongside subset require_matching_paths', () => {
     const yaml = `
 version: 1

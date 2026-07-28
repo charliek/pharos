@@ -275,6 +275,9 @@ export const scenarioSchema = z
     safety: safetySchema.optional(),
     contract: z.string().min(1).optional(),
     variables: z.record(z.unknown()).optional(),
+    // Opt in to the per-target cookie jar for this scenario run (spec Sections
+    // 4.6 and 9.5); default false = no jar, the scenario propagates cookies itself.
+    cookies: z.boolean().optional(),
     setup: hooksBlockSchema.optional(),
     cleanup: hooksBlockSchema.optional(),
     steps: z.array(stepSchema).min(1),

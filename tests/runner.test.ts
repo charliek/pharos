@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { REDACTED } from '../src/comparison/redaction';
 import { defaultConfig, type PharosConfig } from '../src/config/config';
 import { ContractRegistry } from '../src/contract/load';
 import { type Recording, writeRecording } from '../src/execution/fixtures';
@@ -642,5 +643,210 @@ steps:
       grant_type: 'authorization_code',
       session: 's1',
     });
+  });
+});
+
+describe('runScenario — cookie jar (cookies: true)', () => {
+  /** A server that 200s everything and hands out the given `Set-Cookie`s per request path. */
+  async function jarServer(setCookie: Record<string, string[]>): Promise<TestServer> {
+    return startTestServer((req, res) => {
+      const cookies = setCookie[req.url];
+      if (cookies) res.setHeader('set-cookie', cookies);
+      replyJson(res, 200, { ok: true });
+    });
+  }
+
+  /** The common login server: a root session cookie plus an /admin-scoped one. */
+  function cookieServer(session: string): Promise<TestServer> {
+    return jarServer({ '/login': [`sid=${session}; Path=/`, 'admin=ADM; Path=/admin'] });
+  }
+
+  /** These scenarios differ only in id, steps, and (rarely) mode or the opt-in. */
+  function cookieScenario(
+    id: string,
+    steps: string,
+    { mode = 'new_only_assert', cookies = true } = {},
+  ) {
+    return loadScenarioFromText(
+      `version: 1
+id: ${id}
+name: ${id}
+service: s
+tags: [smoke]
+mode: ${mode}
+cookies: ${cookies}
+steps:
+${steps}`,
+      'test.yaml',
+    );
+  }
+
+  /** Log in, then request one path under the /admin-scoped cookie and one outside it. */
+  const FLOW_STEPS = `  - id: login
+    request: { method: POST, path: /login, body: { user: u } }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+  - id: admin
+    request: { method: GET, path: /admin/panel }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+  - id: public
+    request: { method: GET, path: /public }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+`;
+
+  it('sends the jar cookies path-matched and most-specific-path-first', async () => {
+    newServer = await cookieServer('SESSION');
+    const scenario = cookieScenario('auth.flow', FLOW_STEPS);
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+    // Nothing to send on the first request; then /admin/panel matches both
+    // cookies (longest path first) and /public matches only the root one.
+    expect(newServer.requests[0].headers.cookie).toBeUndefined();
+    expect(newServer.requests[1].headers.cookie).toBe('admin=ADM; sid=SESSION');
+    expect(newServer.requests[2].headers.cookie).toBe('sid=SESSION');
+  });
+
+  it('sends nothing without the opt-in', async () => {
+    newServer = await cookieServer('SESSION');
+    const scenario = cookieScenario('auth.flow', FLOW_STEPS, { cookies: false });
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+    expect(newServer.requests.every((r) => r.headers.cookie === undefined)).toBe(true);
+  });
+
+  it('ingests cookies from a manual-redirect 30x response', async () => {
+    newServer = await startTestServer((req, res) => {
+      if (req.url === '/start') {
+        res.statusCode = 302;
+        res.setHeader('location', '/next');
+        res.setHeader('set-cookie', ['hop=H1; Path=/']);
+        res.end();
+        return;
+      }
+      replyJson(res, 200, { ok: true });
+    });
+    const scenario = cookieScenario(
+      'auth.hop',
+      `  - id: start
+    request: { method: GET, path: /start, follow_redirects: false }
+    compare: { strategy: explicit_expectations, expect: { status: 302 } }
+  - id: next
+    request: { method: GET, path: /next }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+`,
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+    expect(newServer.requests[1].headers.cookie).toBe('hop=H1');
+  });
+
+  it('lets an explicit Cookie header replace the jar while still ingesting the response', async () => {
+    newServer = await jarServer({
+      '/login': ['sid=SESSION; Path=/'],
+      '/echo': ['fresh=F1; Path=/'],
+    });
+    const scenario = cookieScenario(
+      'auth.explicit',
+      `  - id: login
+    request: { method: POST, path: /login, body: { user: u } }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+  - id: echo
+    request:
+      method: GET
+      path: /echo
+      headers: { Cookie: manual=MINE }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+  - id: after
+    request: { method: GET, path: /after }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+`,
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+    // The step's own header wins outright — the jar's sid is not merged in.
+    expect(newServer.requests[1].headers.cookie).toBe('manual=MINE');
+    // …but that response's Set-Cookie still landed in the jar, and the
+    // explicit header never did.
+    expect(newServer.requests[2].headers.cookie).toBe('sid=SESSION; fresh=F1');
+  });
+
+  it('keeps legacy and new jars independent in compare_live', async () => {
+    legacyServer = await cookieServer('LEGACY');
+    newServer = await cookieServer('NEW');
+    const scenario = cookieScenario(
+      'auth.both',
+      `  - id: login
+    request: { method: POST, path: /login, body: { user: u } }
+    compare: { strategy: json_semantic, status: same }
+  - id: profile
+    request: { method: GET, path: /profile }
+    compare: { strategy: json_semantic, status: same }
+`,
+      { mode: 'compare_live' },
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(true);
+    expect(legacyServer.requests[1].headers.cookie).toBe('sid=LEGACY');
+    expect(newServer.requests[1].headers.cookie).toBe('sid=NEW');
+  });
+
+  it('never writes a jar-sent cookie value into failure artifacts', async () => {
+    newServer = await jarServer({ '/login': ['sid=SUPER-SECRET-SESSION; Path=/'] });
+    const scenario = cookieScenario(
+      'auth.leak',
+      `  - id: login
+    request: { method: POST, path: /login, body: { user: u } }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+  - id: profile
+    request: { method: GET, path: /profile }
+    compare: { strategy: explicit_expectations, expect: { status: 418 } }
+`,
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(false);
+    // The failing request really did carry the jar's cookie…
+    expect(newServer.requests[1].headers.cookie).toBe('sid=SUPER-SECRET-SESSION');
+    const artifacts = readArtifacts('auth.leak', 'profile');
+    expect(artifacts).toContain(REDACTED);
+    expect(artifacts).not.toContain('SUPER-SECRET-SESSION');
+  });
+
+  it('masks jar cookies in artifacts even when the config drops cookie redaction', async () => {
+    newServer = await startTestServer((req, res) => {
+      if (req.url === '/login') {
+        res.setHeader('set-cookie', ['sid=SUPER-SECRET-SESSION; Path=/']);
+      }
+      replyJson(res, 200, { ok: true });
+    });
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: auth.leak2
+name: leak2
+service: s
+tags: [smoke]
+mode: new_only_assert
+cookies: true
+steps:
+  - id: login
+    request: { method: POST, path: /login, body: { user: u } }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+  - id: profile
+    request: { method: GET, path: /profile }
+    compare: { strategy: explicit_expectations, expect: { status: 418 } }
+`,
+      'test.yaml',
+    );
+    // An operator who empties redaction.headers still cannot expose values the
+    // jar put on the wire — the artifact writer masks cookies unconditionally.
+    const result = await runScenario(
+      scenario,
+      'test.yaml',
+      config({ redaction: { headers: [], json_paths: [], query_params: [] } }),
+      registry,
+    );
+    expect(result.pass).toBe(false);
+    expect(newServer.requests[1].headers.cookie).toBe('sid=SUPER-SECRET-SESSION');
+    const artifacts = readArtifacts('auth.leak2', 'profile');
+    expect(artifacts).toContain(REDACTED);
+    expect(artifacts).not.toContain('SUPER-SECRET-SESSION');
   });
 });
