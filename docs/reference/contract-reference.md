@@ -35,6 +35,16 @@ defaults:
     enum_aliases:
       - path: "$.status"
         aliases: { ACTIVE: enabled, INACTIVE: disabled }
+  # Two optional comparison dimensions; omitted at every layer = not compared.
+  set_cookie:
+    compare: true                # master switch
+    ignore_cookies: []           # cookie names excluded entirely
+    ignore_attributes: []        # e.g. [Expires] — clock-dependent attributes
+    compare_values: exact        # exact | presence (presence: name + attributes)
+  location:
+    compare: true
+    ignore_query_params: []      # e.g. [state, nonce]
+    origin: exact                # exact | ignore (ignore: path + query only)
 
 routes:
   - id: "get-user"
@@ -58,12 +68,32 @@ routes:
 | `redact_paths` | Mask the matched values (compared by presence, never by value; never leaked). |
 | `sort_arrays` | Order an array by a stable element key (tie-broken on the full element). |
 | `unordered_arrays` | Order an array as a set. |
-| `normalize_timestamps` | Parse, convert to UTC, and truncate to the precision (`milliseconds`, `seconds`, `minutes`, `hours`, `days`). |
+| `normalize_timestamps` | Parse, convert to UTC, and truncate to the precision (`milliseconds` — spelled `millis` in Limen's own output, both accepted — `seconds`, `minutes`, `hours`, `days`). |
 | `enum_aliases` | Map equivalent enum spellings to one canonical token. |
 
 `compare_status`, `compare_body` (booleans) and `compare_headers` (a list) round
 out the block. Object key order is always canonicalized, so it never causes a
 false mismatch.
+
+## Set-Cookie and Location
+
+`set_cookie` and `location` are comparison **dimensions of their own**, not
+`compare_headers` entries: `Set-Cookie` is multi-valued (a single-value header
+map keeps only the last one) and `Location` needs URL semantics. Declaring
+either block anywhere — service `defaults` or a route's `comparison` — turns
+that dimension on; omitting it everywhere means it is not compared at all. A
+block that is present but empty (`location: {}`) takes every default shown
+above. Listing `set-cookie` or `location` in `compare_headers` while the
+corresponding block is present is a **load-time validation error**.
+
+Cookies pair by name (duplicates pair positionally within the name group);
+attribute names are case-insensitive, attribute values exact, cookie names
+case-sensitive. A relative `Location` is resolved against the URL of the request
+that produced the response before its origin, path, and query are compared —
+the query as a name → values map, so parameter order never matters. Cookie
+values are never rendered into any output, and `Location` query values are
+masked for secret-bearing parameter names (`code`, `access_token`, …). Full
+semantics: spec Section 8.6, held in lockstep with Limen by a shared fixture.
 
 ## Supported JSONPath subset
 

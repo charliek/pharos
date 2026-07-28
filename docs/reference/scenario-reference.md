@@ -80,20 +80,44 @@ compare:
     require_matching_paths: [$.id, $.name]                # subset
     ignore_paths: [$.metadata.requestId]                  # inline normalization
     sort_arrays: [{ path: $.items, key: id }]
+  set_cookie: { ignore_attributes: [Expires] }            # inline dimension
+  location: { ignore_query_params: [state], origin: exact }
   expect:                            # explicit_expectations
     status: 404
+    headers: { x-frame-options: DENY }        # exact, case-insensitive names
+    header_absent: [x-forwarded-host]
     body:
       json_paths:
         $.error.code: USER_NOT_FOUND
+    set_cookie:                                # order-insensitive
+      - name: session
+        value_present: true                    # or `value: <exact>`, never both
+        attributes: { Path: /, HttpOnly: true } # true/false = flag presence
+        exact_attributes: false                 # true: the full attribute set
+    location:
+      path: /login
+      query: { error: access_denied }
+      query_present: [return_to]
+      query_absent: [client_secret]
   comparator: compareDeviceList      # custom (named hook)
   args: { ignore_offline_timestamp: true }
 ```
 
-`explicit_expectations` must assert at least `expect.status` or a non-empty
-`expect.body.json_paths`. The behavioral normalization vocabulary under
-`compare.body` (ignore_paths, redact_paths, sort_arrays, unordered_arrays,
-normalize_timestamps, enum_aliases) is the **inline fallback** — using it together
-with a `contract` reference is a validation error.
+`explicit_expectations` must assert at least one of `expect.status`,
+`expect.body.json_paths`, `expect.headers`, `expect.header_absent`,
+`expect.set_cookie`, `expect.location`. Naming `set-cookie` or `cookie` in
+`expect.headers` / `expect.header_absent` is a validation error — those read the
+lossy single-value header map; assert cookies with `expect.set_cookie`, which
+reads the lossless capture. Each `set_cookie` entry consumes the first
+not-yet-consumed response cookie of that name, in response order; response
+cookies no expectation consumed are not an error. A relative `Location` is
+resolved against the request URL before its parts are asserted. Cookie values
+are never rendered into a failure, expected or actual.
+
+The behavioral vocabulary under `compare.body` (ignore_paths, redact_paths,
+sort_arrays, unordered_arrays, normalize_timestamps, enum_aliases) plus
+`compare.set_cookie` / `compare.location` is the **inline fallback** — using any
+of it together with a `contract` reference is a validation error.
 
 ## Safety metadata
 

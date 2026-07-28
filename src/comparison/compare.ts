@@ -1,13 +1,21 @@
 import type { HttpResponseRecord } from '../execution/http-client';
+import { assertHeaderExpectations, type HeaderExpectations } from './expectations';
+import { compareLocation, compareSetCookie, type DimensionResult } from './headers';
 import { diffJson, renderMismatches } from './json-diff';
 import { matchPathBetween, matchPathExpectation } from './matchers';
 import { normalizeJson } from './normalize';
-import { REDACTED, redactHeaderMismatches, redactHeaders, redactJsonValue } from './redaction';
+import {
+  asciiLower,
+  REDACTED,
+  redactHeaderMismatches,
+  redactHeaders,
+  redactJsonValue,
+} from './redaction';
 import type { ComparisonResult, ComparisonStrategy, Mismatch } from './result';
 import type { ComparisonRules } from './rules';
 
 /** Explicit expectations asserted against a single (new) response. */
-export interface ExpectSpec {
+export interface ExpectSpec extends HeaderExpectations {
   status?: number;
   body?: { json_paths?: Record<string, unknown> };
 }
@@ -36,6 +44,16 @@ export interface CompareRequest {
   comparatorArgs?: unknown;
   /** Header names whose values must be masked in any mismatch (output safety). */
   sensitiveHeaders?: string[];
+  /** Query-parameter names to mask on top of the built-in secret-bearing ones. */
+  sensitiveQueryParams?: string[];
+  /**
+   * The URL of the request that produced `legacy` — what a relative `Location`
+   * resolves against (spec Section 8.6). Absent for a recorded response whose
+   * request URL cannot be reconstructed.
+   */
+  legacyRequestUrl?: string;
+  /** The URL of the request that produced `candidate`. */
+  candidateRequestUrl?: string;
 }
 
 function requireLegacy(req: CompareRequest): HttpResponseRecord {
@@ -60,7 +78,7 @@ function compareHeaders(
   out: Mismatch[],
 ): void {
   for (const name of names) {
-    const key = name.toLowerCase();
+    const key = asciiLower(name);
     const expected = legacy.headers[key];
     const actual = candidate.headers[key];
     if (expected !== actual) {
@@ -105,13 +123,50 @@ function summarize(strategy: ComparisonStrategy, mismatches: Mismatch[]): string
     : `${mismatches.length} mismatch${mismatches.length === 1 ? '' : 'es'} (${strategy})`;
 }
 
-function toResult(strategy: ComparisonStrategy, mismatches: Mismatch[]): ComparisonResult {
+function toResult(
+  strategy: ComparisonStrategy,
+  mismatches: Mismatch[],
+  truncated = false,
+): ComparisonResult {
   return {
     pass: mismatches.length === 0,
     summary: summarize(strategy, mismatches),
     mismatches,
     diffText: mismatches.length > 0 ? renderMismatches(mismatches) : undefined,
+    ...(truncated ? { diffTruncated: true } : {}),
   };
+}
+
+/**
+ * Run the two opt-in header dimensions (spec Section 8.6). Each is compared only
+ * when some contract layer declared its block; each list is bounded, and a clip
+ * on either sets the result's truncation flag. Returns whether anything was
+ * clipped.
+ */
+function compareDimensions(
+  req: CompareRequest,
+  legacy: HttpResponseRecord,
+  out: Mismatch[],
+): boolean {
+  const options = { sensitiveQueryParams: req.sensitiveQueryParams };
+  const dimensions: DimensionResult[] = [];
+  if (req.rules.set_cookie) {
+    dimensions.push(
+      compareSetCookie(req.rules.set_cookie, legacy.setCookie, req.candidate.setCookie, options),
+    );
+  }
+  if (req.rules.location) {
+    dimensions.push(
+      compareLocation(
+        req.rules.location,
+        { headers: legacy.headers, requestUrl: req.legacyRequestUrl },
+        { headers: req.candidate.headers, requestUrl: req.candidateRequestUrl },
+        options,
+      ),
+    );
+  }
+  for (const dimension of dimensions) out.push(...dimension.mismatches);
+  return dimensions.some((dimension) => dimension.truncated);
 }
 
 /**
@@ -131,7 +186,7 @@ function redactedView(
   // Set-Cookie values are secrets, so the redacted view masks each captured
   // header wholesale when set-cookie is sensitive; attribute-level cookie
   // redaction arrives with the set_cookie comparison dimension (Section 8.6).
-  const cookiesSensitive = sensitiveHeaders.some((name) => name.toLowerCase() === 'set-cookie');
+  const cookiesSensitive = sensitiveHeaders.some((name) => asciiLower(name) === 'set-cookie');
   return {
     status: response.status,
     headers: redactHeaders(response.headers, sensitiveHeaders),
@@ -172,6 +227,7 @@ export function compare(req: CompareRequest): ComparisonResult {
 
   const mismatches: Mismatch[] = [];
   const wantStatus = req.rules.compare_status || req.statusSame === true;
+  let truncated = false;
 
   switch (req.strategy) {
     case 'exact':
@@ -179,12 +235,14 @@ export function compare(req: CompareRequest): ComparisonResult {
       const legacy = requireLegacy(req);
       if (wantStatus) compareStatus(legacy.status, req.candidate.status, mismatches);
       compareHeaders(legacy, req.candidate, req.rules.compare_headers, mismatches);
+      truncated = compareDimensions(req, legacy, mismatches);
       compareBodies(legacy, req.candidate, req.rules, mismatches);
       break;
     }
     case 'subset': {
       const legacy = requireLegacy(req);
       if (wantStatus) compareStatus(legacy.status, req.candidate.status, mismatches);
+      truncated = compareDimensions(req, legacy, mismatches);
       const normalizedLegacy =
         legacy.bodyJson !== undefined ? normalizeJson(legacy.bodyJson, req.rules.json) : undefined;
       const normalizedCandidate =
@@ -220,9 +278,25 @@ export function compare(req: CompareRequest): ComparisonResult {
           matchPathExpectation(body, path, expectedValue, mismatches);
         }
       }
+      // Header / Set-Cookie / Location assertions reuse the Section 8.6 parsers
+      // one-sided (spec Section 4.7).
+      assertHeaderExpectations(
+        expect,
+        {
+          headers: req.candidate.headers,
+          setCookie: req.candidate.setCookie,
+          requestUrl: req.candidateRequestUrl,
+        },
+        mismatches,
+        { sensitiveQueryParams: req.sensitiveQueryParams },
+      );
       break;
     }
   }
 
-  return toResult(req.strategy, redactHeaderMismatches(mismatches, req.sensitiveHeaders ?? []));
+  return toResult(
+    req.strategy,
+    redactHeaderMismatches(mismatches, req.sensitiveHeaders ?? []),
+    truncated,
+  );
 }

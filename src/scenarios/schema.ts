@@ -1,6 +1,14 @@
 import { z } from 'zod';
+import { expectedCookieSchema, expectedLocationSchema } from '../comparison/expectations';
 import { JsonPathError, parseJsonPath } from '../comparison/jsonpath';
-import { jsonNormalizationSchema, jsonPathSchema } from '../comparison/rules';
+import {
+  dimensionHeaderConflictMessage,
+  dimensionHeaderConflicts,
+  jsonNormalizationSchema,
+  jsonPathSchema,
+  locationBlockSchema,
+  setCookieBlockSchema,
+} from '../comparison/rules';
 import { BODYLESS_METHODS, HTTP_METHODS, type HttpMethod } from '../execution/http-client';
 
 /**
@@ -144,15 +152,58 @@ const compareBodySchema = jsonNormalizationSchema
   })
   .strict();
 
+/**
+ * Header names that must never be asserted through the single-value `headers`
+ * map: `set-cookie` is multi-valued (the map keeps only the last one, spec
+ * Section 9.2) and `cookie` carries secrets. Use `expect.set_cookie` instead.
+ */
+const COOKIE_HEADER_NAMES = new Set(['set-cookie', 'cookie']);
+
 const expectSchema = z
   .object({
     status: z.number().int().optional(),
+    headers: z.record(z.string()).optional(),
+    header_absent: z.array(z.string()).optional(),
     body: z
       .object({ json_paths: z.record(z.unknown()).optional() })
       .strict()
       .optional(),
+    // The assertion engine's own schemas (spec Section 4.7), so the loader and
+    // the engine cannot drift apart.
+    set_cookie: z.array(expectedCookieSchema).optional(),
+    location: expectedLocationSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((expect, ctx) => {
+    const rejectCookieHeader = (path: (string | number)[], name: string): void => {
+      if (!COOKIE_HEADER_NAMES.has(name.trim().toLowerCase())) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `expect.headers/header_absent must not name '${name}' — the single-value headers map keeps only the last Set-Cookie (spec Section 9.2); assert cookies with expect.set_cookie`,
+      });
+    };
+    for (const name of Object.keys(expect.headers ?? {})) {
+      rejectCookieHeader(['headers', name], name);
+    }
+    for (const [index, name] of (expect.header_absent ?? []).entries()) {
+      rejectCookieHeader(['header_absent', index], name);
+    }
+    for (const [index, cookie] of (expect.set_cookie ?? []).entries()) {
+      // Field *presence*, not truthiness: `{ value: abc, value_present: false }`
+      // is the same confused intent as `value_present: true` beside a value, and
+      // silently ignoring the `false` would assert something the author did not
+      // write.
+      if (cookie.value !== undefined && cookie.value_present !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['set_cookie', index, 'value_present'],
+          message:
+            'a cookie expectation asserts either an exact `value` or `value_present`, not both',
+        });
+      }
+    }
+  });
 
 const compareSchema = z
   .object({
@@ -160,12 +211,26 @@ const compareSchema = z
     status: z.literal('same').optional(),
     headers: headerRulesSchema.optional(),
     body: compareBodySchema.optional(),
+    // The two opt-in dimensions, in the contract's vocabulary verbatim (spec
+    // Section 8.6), so an inline scenario resolves them like a contract route.
+    set_cookie: setCookieBlockSchema.optional(),
+    location: locationBlockSchema.optional(),
     expect: expectSchema.optional(),
     comparator: z.string().optional(),
     args: z.record(z.unknown()).optional(),
   })
   .strict()
   .superRefine((compare, ctx) => {
+    for (const name of dimensionHeaderConflicts(compare.headers?.compare, {
+      set_cookie: Boolean(compare.set_cookie),
+      location: Boolean(compare.location),
+    })) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['headers', 'compare'],
+        message: dimensionHeaderConflictMessage(name),
+      });
+    }
     if (compare.strategy === 'subset') {
       if (!compare.body?.require_matching_paths?.length) {
         ctx.addIssue({
@@ -183,15 +248,21 @@ const compareSchema = z
           message: "strategy 'explicit_expectations' requires compare.expect",
         });
       } else {
-        const jsonPaths = compare.expect.body?.json_paths;
-        const hasStatus = compare.expect.status !== undefined;
-        const hasBody = jsonPaths !== undefined && Object.keys(jsonPaths).length > 0;
-        if (!hasStatus && !hasBody) {
+        const expect = compare.expect;
+        const jsonPaths = expect.body?.json_paths;
+        const asserts =
+          expect.status !== undefined ||
+          (jsonPaths !== undefined && Object.keys(jsonPaths).length > 0) ||
+          Object.keys(expect.headers ?? {}).length > 0 ||
+          (expect.header_absent?.length ?? 0) > 0 ||
+          (expect.set_cookie?.length ?? 0) > 0 ||
+          expect.location !== undefined;
+        if (!asserts) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['expect'],
             message:
-              "strategy 'explicit_expectations' must assert at least expect.status or a non-empty expect.body.json_paths",
+              "strategy 'explicit_expectations' must assert at least one of expect.status, expect.body.json_paths, expect.headers, expect.header_absent, expect.set_cookie, expect.location",
           });
         }
         if (jsonPaths) {
@@ -256,6 +327,10 @@ const INLINE_BEHAVIORAL_BODY_FIELDS = [
 function hasInlineBehavioralRules(step: z.infer<typeof stepSchema>): boolean {
   const headers = step.compare?.headers;
   if ((headers?.compare?.length ?? 0) > 0 || (headers?.ignore?.length ?? 0) > 0) {
+    return true;
+  }
+  // The two dimensions are behavioral rules like any other (spec Section 8.6).
+  if (step.compare?.set_cookie !== undefined || step.compare?.location !== undefined) {
     return true;
   }
   const body = step.compare?.body;

@@ -7,7 +7,13 @@ import { ValidationError } from '../errors';
 import { writeFailureArtifacts } from '../reporting/artifacts';
 import type { Scenario, ScenarioStep } from '../scenarios/schema';
 import type { CookieJar } from './cookies';
-import { buildRecording, loadRecording, recordingResponse, writeRecording } from './fixtures';
+import {
+  buildRecording,
+  loadRecording,
+  type Recording,
+  recordingResponse,
+  writeRecording,
+} from './fixtures';
 import {
   buildUrl,
   type HttpClientOptions,
@@ -142,6 +148,12 @@ interface SentRequest {
   /** The spec as actually sent — including a jar-built `Cookie` header, if any. */
   spec: HttpRequestSpec;
   response: HttpResponseRecord;
+  /**
+   * The absolute URL the request resolved to; a relative `Location` in the
+   * response resolves against it (spec Section 8.6). Undefined when the path did
+   * not resolve at all (a cross-origin absolute path, which the client refuses).
+   */
+  url?: string;
 }
 
 function hasExplicitCookieHeader(headers: Record<string, string> | undefined): boolean {
@@ -154,9 +166,13 @@ function hasExplicitCookieHeader(headers: Record<string, string> | undefined): b
  * needs this up front — the send itself resolves the URL again and reports the
  * real error.
  */
-function resolvedRequestUrl(baseUrl: string, path: string): string | undefined {
+function resolvedRequestUrl(
+  baseUrl: string,
+  path: string,
+  query?: HttpRequestSpec['query'],
+): string | undefined {
   try {
-    return buildUrl(baseUrl, path);
+    return buildUrl(baseUrl, path, query);
   } catch {
     return undefined;
   }
@@ -177,11 +193,11 @@ async function sendToTarget(
 ): Promise<SentRequest> {
   const options = clientOptions(side, config);
   const jar = deps.cookieJars?.[side];
-  // Path matching needs the resolved URL, so a path that does not resolve gets
-  // no jar treatment at all.
-  const requestUrl = jar ? resolvedRequestUrl(options.baseUrl, spec.path) : undefined;
+  // The resolved URL serves the jar (path matching) and comparison (a relative
+  // `Location` resolves against it). A path that does not resolve gets neither.
+  const requestUrl = resolvedRequestUrl(options.baseUrl, spec.path, spec.query);
   if (!jar || requestUrl === undefined) {
-    return { spec, response: await deps.send(options, spec) };
+    return { spec, response: await deps.send(options, spec), url: requestUrl };
   }
   let sent = spec;
   if (!hasExplicitCookieHeader(spec.headers)) {
@@ -190,7 +206,7 @@ async function sendToTarget(
   }
   const response = await deps.send(options, sent);
   jar.ingest(response.setCookie, requestUrl);
-  return { spec: sent, response };
+  return { spec: sent, response, url: requestUrl };
 }
 
 function executionFailure(
@@ -290,6 +306,8 @@ export async function runStep(
   }
 
   let legacy: HttpResponseRecord | undefined;
+  /** The URL the legacy request went to — the base a relative `Location` resolves against. */
+  let legacyRequestUrl: string | undefined;
   // The new-side send is kept whole because failure artifacts record its `spec`
   // — the request as actually sent, so a jar-built `Cookie` header shows up
   // (redacted) instead of being invisible. Artifacts carry one request, as they
@@ -300,12 +318,27 @@ export async function runStep(
     if (!step.recording) {
       return executionFailure(step, `step '${step.id}': replay requires a recording fixture`);
     }
+    let recording: Recording;
     try {
-      legacy = recordingResponse(loadRecording(config.fixture_dir, step.recording.fixture));
+      recording = loadRecording(config.fixture_dir, step.recording.fixture);
+      legacy = recordingResponse(recording);
     } catch (error) {
       const detail = error instanceof ValidationError ? error.issues[0]?.message : messageOf(error);
       return executionFailure(step, `step '${step.id}': ${detail ?? messageOf(error)}`);
     }
+    // A relative `Location` in the recorded response was written relative to the
+    // URL the *recorded* request went to (spec Section 8.6) — which is the
+    // recording's own path, not the live step's: a parameterized replay can send
+    // a different path entirely, and resolving against that would invent a
+    // redirect target the legacy service never named. The recorded query is
+    // deliberately not applied: it is redacted on disk, and a base URL's query
+    // never participates in resolving a relative reference. With no legacy base
+    // URL configured (replay does not require one), or a recorded path that does
+    // not resolve against it, the base is absent and the comparison takes the
+    // exact-string fallback.
+    legacyRequestUrl = config.legacy_base_url
+      ? resolvedRequestUrl(config.legacy_base_url, recording.request.path)
+      : undefined;
     // Send the scenario's request (freshly variable-substituted, so it carries
     // current auth); the recording supplies the legacy *response* to compare
     // against. The recorded request is redacted and so is not replayed.
@@ -318,6 +351,7 @@ export async function runStep(
       sendToTarget('new', config, spec, deps),
     ]);
     legacy = legacySent.response;
+    legacyRequestUrl = legacySent.url;
     sentNew = newSent;
   } else {
     // new_only_assert
@@ -377,6 +411,9 @@ export async function runStep(
     comparator,
     comparatorArgs: step.compare.args,
     sensitiveHeaders: config.redaction.headers,
+    sensitiveQueryParams: config.redaction.query_params,
+    legacyRequestUrl,
+    candidateRequestUrl: sentNew.url,
   };
   const comparison = compare(request);
 

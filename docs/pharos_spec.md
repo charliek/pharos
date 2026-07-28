@@ -311,6 +311,7 @@ Setting the scenario-level `cookies: true` (Section 4.3) enables a **per-target*
 - Every step response's `Set-Cookie` headers (the `setCookie` capture, Section 9.2) are applied to the jar for that response's target, **including** the 30x response of a `follow_redirects: false` step — a manual redirect chain still accumulates cookies at each hop.
 - The jar keys entries by **(name, path)** per RFC 6265 — domain is constant per target, so it is not part of the key. A `Set-Cookie` for a (name, path) pair already in the jar is **last-write-wins**: it replaces that entry's value and attributes. Two cookies with the same name but different `Path` attributes coexist as separate entries.
 - On send, every subsequent request to that target gets a `Cookie` header built from the jar entries whose `Path` matches the request path, ordered **most-specific-path-first** (standard cookie path-matching), unless the step declares its own explicit `Cookie` header (Section 9.5) — in which case the jar is not consulted for that request's outgoing header, though it still ingests that response's `Set-Cookie`.
+- A `Cookie` entry in the config's `default_headers` (Section 6.2) is **overridden by the jar**: a jar-built `Cookie` header replaces it for that request, since a run-wide default cookie must not silently outrank the session the scenario just established. Only a **step's** explicit `Cookie` header replaces the jar's (below and Section 9.5).
 - The jar is scoped to **one scenario run** — it never persists or leaks across scenarios.
 - Cookie **values** are still redacted (Section 8.5) in every rendered output; the jar's in-memory state is never itself an output.
 
@@ -396,8 +397,8 @@ compare:
 - `headers` — exact match on named single-value headers (case-insensitive names), read from the response's `headers` map. Naming `set-cookie` or `cookie` in `headers` or `header_absent` is a **load-time validation error** — cookie assertions read the lossy single-value map otherwise, exactly the drift Section 9.2 exists to prevent; use `set_cookie` instead. This mirrors the `compare_headers` conflict rule in Section 8.6.
 - `header_absent` — header names that must **not** be present on the response. Same `set-cookie`/`cookie` restriction as `headers`, above.
 - `body.json_paths` — exact value at each JSONPath (Section 8.4 subset).
-- `set_cookie` — expected cookies matched by `name` against the response's `setCookie` capture (Section 9.2). Matching is **one-sided and order-preserving**: each `set_cookie` entry consumes the **first not-yet-consumed** response cookie with that `name`, in response order — so two expected entries with the same name consume successive occurrences. Response cookies never consumed by an expectation are **not** an error (expectations assert, they don't exhaustively describe the response). Each entry asserts either an exact `value` or `value_present: true` (non-empty, value itself not checked). `attributes` is compared case-insensitively on attribute names and exactly on attribute values; unlisted attributes are don't-care unless `exact_attributes: true`, in which case the cookie's full attribute set must equal the listed one. An expected cookie with no matching unconsumed response cookie is a mismatch.
-- `location` — parses the response's `location` header as a URL, resolving a relative `Location` against the request URL first (Section 8.6), and asserts the given parts; a part omitted from the block is don't-care. `path` is exact; `query` gives exact values for named params; `query_present` asserts named params exist (value free); `query_absent` asserts named params are absent.
+- `set_cookie` — expected cookies matched by `name` against the response's `setCookie` capture (Section 9.2). Matching is **one-sided and order-preserving**: each `set_cookie` entry consumes the **first not-yet-consumed** response cookie with that `name`, in response order — so two expected entries with the same name consume successive occurrences. Response cookies never consumed by an expectation are **not** an error (expectations assert, they don't exhaustively describe the response). Each entry asserts either an exact `value` or `value_present: true` (non-empty, value itself not checked) — declaring both is a validation error. `attributes` is compared case-insensitively on attribute names and exactly on attribute values, except that a **boolean** expected value asserts a flag attribute's presence (`HttpOnly: true`) or absence (`HttpOnly: false`) rather than its text; unlisted attributes are don't-care unless `exact_attributes: true`, in which case the cookie's full attribute set must equal the listed one. An expected cookie with no matching unconsumed response cookie is a mismatch. Neither the expected nor the actual cookie **value** is ever rendered into a mismatch, exactly as in Section 8.6.
+- `location` — parses the response's `location` header as a URL, resolving a relative `Location` against the request URL first (Section 8.6), and asserts the given parts; a part omitted from the block is don't-care. `path` is exact; `query` gives exact values for named params; `query_present` asserts named params exist (value free); `query_absent` asserts named params are absent. A response with no `Location` fails a `location` block as a presence mismatch, and one whose `Location` cannot be resolved fails as a raw mismatch without being rendered; query values under the secret-bearing parameter names (Section 8.5) are masked on **both** sides, expected included.
 
 `set_cookie` and `location` here reuse the **same** Set-Cookie/URL parsers as the two-sided `set_cookie`/`location` comparison blocks (Section 8.6) — one implementation, two consumers. Unlike Section 8.6, these are Pharos-only, one-sided assertions: Limen never asserts one-sided, so this vocabulary carries no lockstep obligation (Section 13); only the parsing semantics (including relative-Location resolution) are shared. The name-pairing rule differs deliberately from Section 8.6's two-sided *positional* pairing within a duplicate-name group: one-sided assertions consume in response order instead, since there is no second side to position against.
 
@@ -411,7 +412,7 @@ compare:
     ignore_offline_timestamp: true
 ```
 
-**Inline-rules fallback.** A scenario without a `contract` reference may declare normalization inline under `compare.body` / `compare.headers`, using the **same vocabulary as the contract** (Section 8). If a scenario specifies **both** a `contract` reference **and** an inline behavioral block, that is a **validation error** — one source of behavioral truth per scenario.
+**Inline-rules fallback.** A scenario without a `contract` reference may declare normalization inline under `compare.body` / `compare.headers` — and the two comparison dimensions under `compare.set_cookie` / `compare.location` (Section 8.6) — using the **same vocabulary as the contract** (Section 8). If a scenario specifies **both** a `contract` reference **and** an inline behavioral block, that is a **validation error** — one source of behavioral truth per scenario.
 
 ```yaml
 # inline fallback (no contract reference)
@@ -620,7 +621,7 @@ defaults:
 routes:
   - id: "get-device"
     match:
-      methods: ["GET"]
+      methods: ["GET"]     # GET | POST | PUT | PATCH | DELETE | OPTIONS | HEAD (Section 9.1)
       path_template: "/devices/{id}"
     comparison:
       json:
@@ -769,7 +770,11 @@ export type ComparisonStrategy =
 
 export interface Mismatch {
   path: string;
-  kind: 'status' | 'header' | 'body' | 'missing' | 'extra' | 'type' | 'value' | 'custom';
+  kind:
+    | 'status' | 'header' | 'body' | 'missing' | 'extra' | 'type' | 'value' | 'custom'
+    // the two opt-in dimensions of Section 8.6
+    | 'set_cookie.presence' | 'set_cookie.value' | 'set_cookie.attribute' | 'set_cookie.malformed'
+    | 'location.presence' | 'location.origin' | 'location.path' | 'location.query' | 'location.raw';
   expected?: unknown;
   actual?: unknown;
   message: string;
@@ -780,8 +785,11 @@ export interface ComparisonResult {
   summary: string;
   mismatches: Mismatch[];
   diffText?: string;
+  diffTruncated?: boolean;    // a bounded mismatch list was clipped (Section 8.6)
 }
 ```
+
+**Engine-neutral mismatch kinds.** The cross-engine decision table (Section 13) records a result as a **sorted, de-duplicated set** of kind strings: `status`, `body` (which the body-level kinds `missing`/`extra`/`type`/`value` collapse into), `header`, `set_cookie.<kind>`, and `location.<kind>`. It is a set, deliberately order-independent: the two engines must agree on *which* mismatches exist, not on the order in which they find them.
 
 ### 8.4 Supported JSONPath subset (hard MVP boundary)
 
@@ -820,9 +828,21 @@ location:
 
 **`location` semantics:** the `location` header is parsed as a URL on both sides. A **relative** `Location` value is first resolved against the URL of the request that produced the response (RFC 9110 §10.2.2) — the same resolution a browser would perform — before any parts are compared; only if that resolution itself fails does the exact-string fallback below apply. Query params named in `ignore_query_params` are removed from both sides before comparing. `origin: exact` compares scheme+host+port as well as path and remaining query; `origin: ignore` compares only path and remaining query — for cases where legacy and new intentionally redirect to different hosts for the same logical destination. The `expect.location` assertion (Section 4.7) resolves relative Locations the same way.
 
-**Both:** a value that fails to parse (a malformed Set-Cookie, or a Location that cannot be resolved even relative to the request URL) falls back to **exact string comparison** and counts as a mismatch if the sides differ. Redaction (Section 8.5) still applies to rendered values — a dedicated test proves a `set_cookie` mismatch never renders a raw cookie value (name and attribute diff only, per the no-secret-value invariant in Section 12).
+**Both:** a value that fails to parse (a malformed Set-Cookie, or a Location that cannot be resolved even relative to the request URL) falls back to **exact string comparison** and counts as a mismatch if the sides differ. A `Location` that resolves successfully is always compared part-wise, never as a raw string. Redaction (Section 8.5) still applies to rendered values — a dedicated test proves a `set_cookie` mismatch never renders a raw cookie value (name and attribute diff only, per the no-secret-value invariant in Section 12).
 
-**Lockstep:** this vocabulary — field names, parsing (including relative-Location resolution and empty-block defaults), merge (Section 5.4), and validation semantics — must remain **identical** between Pharos and Limen (Section 13), the same obligation as the JSONPath subset (Section 8.4).
+**Comparison details (normative, lockstep).** Both engines resolved these while implementing the dimensions; they are as binding as the field names:
+
+- **Case sensitivity.** Cookie names — and therefore `ignore_cookies` — are compared **case-sensitively** (RFC 6265). Cookie *attribute* names — and therefore `ignore_attributes` — are compared **ASCII-case-insensitively**; attribute *values* are compared exactly. Query parameter names — and therefore `ignore_query_params` — are compared case-sensitively.
+- **Malformed Set-Cookie** means the name/value pair has no `=`, or the name is empty (the values RFC 6265 §5.2 discards). Unparseable entries are paired with each other **positionally**, never with parsed cookies, and take the exact-string fallback. A duplicated attribute inside one `Set-Cookie` keeps its **last** occurrence, as RFC 6265 §5.2 prescribes.
+- **`compare_values: presence`** compares only whether the two sides *agree* that a value exists: an empty value counts as no value, so `sid=` against `sid=abc` is a value mismatch, while `sid=` on **both** sides matches — that is the cookie-deletion shape (`session=; Max-Age=0`) legacy and new both emit on logout, and it is agreement, not a failure.
+- **Location query.** After `ignore_query_params` removal, the remaining query is compared as a `name -> values` map, so parameter **order never matters**; repeated names compare as an ordered list of values.
+- **Location parts.** `origin: exact` compares the `(scheme, host, effective port)` triple and nothing more — *effective* port, so `https://a` and `https://a:443` are one origin. It is computed from those three parts explicitly rather than from a URL library's `origin` accessor: JavaScript's `URL.origin` reports the string `"null"` for non-special schemes, and Rust's `Url::origin` returns an opaque, never-equal origin for them — either would make two identical `mailto:` Locations mismatch, and they disagree with each other besides. Neither mode compares the URL **fragment** or **userinfo**, which are outside the enumerated parts.
+- **Rendering.** A cookie value is never rendered — a value difference shows the redaction marker (an `<empty>` equivalent when the value is empty), a one-sided cookie shows a `<present>` equivalent, and an unparseable entry is redacted wholesale because it cannot be masked selectively. Attribute values, `Location` origins, and paths are rendered verbatim; `Location` query values are masked for the standard secret-bearing parameter names (Section 8.5) — which include the OAuth authorization `code`. A rendered `Location` is origin + path only, so a `user:password@` userinfo is never emitted, and an unresolvable `Location` is redacted for the same reason as an unparseable cookie. (The marker *text* is each tool's own — Pharos writes `***REDACTED***` — only the verdicts are lockstep.)
+- **Bounds.** The cookie and `Location` mismatch lists are each capped at `MAX_DIFFERENCES` (100, Limen's `max_differences` default), and `ComparisonResult.diffTruncated` says a list was clipped — no single response can grow an unbounded log line.
+
+**Lockstep:** this vocabulary — field names, parsing (including relative-Location resolution and empty-block defaults), merge (Section 5.4), and validation semantics — must remain **identical** between Pharos and Limen (Section 13), the same obligation as the JSONPath subset (Section 8.4). The shared fixture in `tests/fixtures/lockstep/` (a byte-identical twin of the Limen copy) plus its `decisions.json` table pin the resolution rules in both engines: `merge_cases` pins contract resolution and `verdict_cases` pins the comparison itself (a response pair and its rules resolve to one verdict plus a **set** of mismatch kinds, Section 8.3).
+
+**Where the dimensions apply.** They are two-sided comparisons, so a declared block is compared under every two-sided strategy — `exact`, `json_semantic`, and `subset`. `explicit_expectations` has only one response and asserts through the one-sided `expect` vocabulary instead (Section 4.7); `custom` comparators own their verdict entirely. Both blocks are legal in the contract (`defaults` and per-route `comparison`) **and** in a scenario's inline `compare` block, in the same vocabulary — and, like every other behavioral rule, declaring one inline while the scenario also references a contract is a validation error (Section 5.4).
 
 The one-sided `expect.set_cookie` / `expect.location` assertion vocabulary (Section 4.7) reuses these same parsers; that vocabulary is Pharos-only and carries no lockstep obligation of its own.
 
@@ -860,7 +880,7 @@ A step's `request.path` is normally relative to the target's configured base URL
 
 ### 9.5 Cookie jar
 
-See "Cookie jar (`cookies: true`)" in Section 4.6 for the scenario-level opt-in, the (name, path) keying, and most-specific-path-first send ordering. The client itself is stateless per request; the jar lives in the execution layer (`src/execution/cookies.ts`) and injects/reads `Cookie`/`Set-Cookie` around each call. An explicit `Cookie` header on a step's `request.headers` **replaces** the jar-built `Cookie` header for that request entirely — the jar is not consulted for sending on that request — but the jar still ingests `Set-Cookie` from that request's response as usual.
+See "Cookie jar (`cookies: true`)" in Section 4.6 for the scenario-level opt-in, the (name, path) keying, and most-specific-path-first send ordering. The client itself is stateless per request; the jar lives in the execution layer (`src/execution/cookies.ts`) and injects/reads `Cookie`/`Set-Cookie` around each call. An explicit `Cookie` header on a step's `request.headers` **replaces** the jar-built `Cookie` header for that request entirely — the jar is not consulted for sending on that request — but the jar still ingests `Set-Cookie` from that request's response as usual. A `Cookie` in the config's `default_headers` is **not** such an override: a jar-built header replaces it (Section 4.6); only a step's own header replaces the jar.
 
 ### 9.6 Form bodies
 
@@ -933,6 +953,8 @@ The recorded **request** is informational — replay re-sends the scenario's fre
 ### 10.3 Replay behavior
 
 Replay loads the recording, applies allowed variable substitutions to recorded request paths/bodies, executes the new request, normalizes both responses, and compares. A missing or invalid fixture fails clearly.
+
+**Relative `Location` in a recorded response** resolves against the **recorded** request's path (joined to `legacy_base_url`), never the live step's — the recorded response is the answer to the recorded request, and a parameterized replay may send a different path entirely. With no `legacy_base_url` configured (replay does not require one), or a recorded path that does not resolve against it, there is no base and the `location` comparison takes its exact-string fallback (Section 8.6).
 
 ---
 

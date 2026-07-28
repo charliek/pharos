@@ -334,3 +334,47 @@ steps:
     }
   });
 });
+
+describe('inline set_cookie / location blocks (spec §8.6)', () => {
+  /** VALID with the step's compare block replaced by the given YAML lines. */
+  function withCompare(...lines: string[]): string {
+    return VALID.replace(
+      '      strategy: json_semantic\n      status: same\n',
+      `      strategy: json_semantic\n${lines.map((line) => `      ${line}\n`).join('')}`,
+    );
+  }
+
+  it('accepts the dimensions inline when no contract is referenced', () => {
+    expect(
+      paths(
+        withCompare(
+          'set_cookie: { ignore_attributes: [Expires] }',
+          'location: { ignore_query_params: [state], origin: ignore }',
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('rejects compare_headers naming a dimension whose block is present', () => {
+    expect(paths(withCompare('headers: { compare: [Set-Cookie] }', 'set_cookie: {}'))).toEqual([
+      'steps[0].compare.headers.compare',
+    ]);
+    expect(paths(withCompare('headers: { compare: [location] }', 'location: {}'))).toEqual([
+      'steps[0].compare.headers.compare',
+    ]);
+  });
+
+  it('counts a dimension block as inline behavioral rules (contract exclusion)', () => {
+    const withContract = withCompare('set_cookie: {}').replace(
+      'mode: compare_live\n',
+      'mode: compare_live\ncontract: "../contracts/user-service.contract.yaml#get-user"\n',
+    );
+    expect(paths(withContract)).toEqual(['steps[0].compare']);
+  });
+
+  it('rejects an unknown field inside a dimension block', () => {
+    expect(paths(withCompare('location: { origin: sideways }'))).toEqual([
+      'steps[0].compare.location.origin',
+    ]);
+  });
+});

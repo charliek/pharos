@@ -32,6 +32,9 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 
 const UNIT_MS: Record<TimestampPrecision, number> = {
   milliseconds: 1,
+  // Limen's historical spelling of `milliseconds`; both tools accept both, and
+  // they resolve to the same precision (spec Section 8.2).
+  millis: 1,
   seconds: 1_000,
   minutes: 60_000,
   hours: 3_600_000,

@@ -77,7 +77,9 @@ export function defaultConfig(): PharosConfig {
     redaction: {
       headers: ['authorization', 'cookie', 'set-cookie', 'x-api-key'],
       json_paths: [],
-      query_params: ['access_token'],
+      // `code` is an OAuth authorization code — a single-use credential that
+      // travels in redirect Locations, so it is masked by default in both tools.
+      query_params: ['access_token', 'code'],
     },
   };
 }

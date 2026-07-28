@@ -132,7 +132,8 @@ describe('loadConfig precedence (defaults < file < env < overrides)', () => {
     expect(config.scenario_dir.endsWith('from-file-scenarios')).toBe(true);
     // partial redaction override replaces only the named field
     expect(config.redaction.headers).toEqual(['x-secret']);
-    expect(config.redaction.query_params).toEqual(['access_token']);
+    // …leaving the built-in secret-bearing query params (incl. the OAuth `code`)
+    expect(config.redaction.query_params).toEqual(['access_token', 'code']);
   });
 
   it('lets the environment override the file', () => {

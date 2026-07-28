@@ -532,6 +532,63 @@ steps:
     expect(result.steps[0].comparison?.mismatches.some((m) => m.path === '$.name')).toBe(true);
   });
 
+  it('resolves a recorded relative Location against the RECORDED request path', async () => {
+    // The recording was captured on a different (deeper) path than the one the
+    // parameterized replay sends, so a relative `Location` only resolves to the
+    // target legacy actually named when the *recorded* path is the base.
+    writeRecording(reportDir, 'users/location.json', {
+      version: 1,
+      scenarioId: 'seed',
+      stepId: 'get',
+      recordedAt: '2024-01-01T00:00:00.000Z',
+      request: { method: 'GET', path: '/recorded/deep/users/1' },
+      response: {
+        status: 302,
+        headers: { location: 'next' },
+        bodyText: '{}',
+        bodyJson: {},
+        durationMs: 1,
+      },
+    });
+    newServer = await startTestServer((_r, res) => {
+      res.writeHead(302, {
+        location: '/recorded/deep/users/next',
+        'content-type': 'application/json',
+      });
+      res.end('{}');
+    });
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rep.location
+name: rep
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: get
+    recording: { fixture: users/location.json }
+    request: { method: GET, path: /live/1, follow_redirects: false }
+    compare:
+      strategy: json_semantic
+      status: same
+      location: { origin: ignore }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(
+      scenario,
+      'test.yaml',
+      // Replay never calls legacy, but the recorded path still needs an origin
+      // to resolve against.
+      config({ legacy_base_url: 'http://legacy.example' }),
+      registry,
+    );
+    // Resolved against the live path this would be /live/next — a location.path
+    // mismatch instead of a pass.
+    expect(result.steps[0].comparison?.mismatches ?? []).toEqual([]);
+    expect(result.pass).toBe(true);
+  });
+
   it('fails clearly when the replay fixture is missing', async () => {
     newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
     const scenario = loadScenarioFromText(

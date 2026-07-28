@@ -37,7 +37,10 @@ function renderCase(scenario: ReportScenario): string {
       .filter((step) => !step.pass)
       .map(
         (step) =>
-          `${step.stepId}: ${step.summary ?? step.error ?? 'failed'}\n${step.diffText ?? ''}`,
+          `${step.stepId}: ${step.summary ?? step.error ?? 'failed'}\n${step.diffText ?? ''}` +
+          // Say so when a bounded list was clipped, or CI reads the diff as the
+          // whole story (spec Section 8.6).
+          (step.diffTruncated ? '\n… more differences were truncated' : ''),
       ),
   ]
     .filter(Boolean)
