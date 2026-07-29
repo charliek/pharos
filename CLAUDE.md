@@ -47,8 +47,15 @@ CI (`.github/workflows/ci.yml`) enforces `biome ci`, typecheck, and tests.
   between the two tools.
 - **Module map** mirrors `docs/pharos_spec.md` Section 3.5:
   `cli` · `config` · `contract` · `scenarios` · `execution` · `comparison` ·
-  `reporting`. Submodules are added in the phase that implements them rather
-  than created empty up front.
+  `reporting`, plus two top-level, non-CLI files: `src/index.ts` (the public
+  barrel a consuming repo's git dependency imports, Section 19.1) and
+  `src/scaffold.ts` (the `init` template generation behind `cli/init.ts`,
+  Section 19.2). Submodules are added in the phase that implements them rather
+  than created empty up front. Recent additions worth knowing about:
+  `execution/cookies.ts` (per-target cookie jar, Section 9.5),
+  `comparison/headers.ts` (Set-Cookie/Location parsing + two-sided comparison,
+  Section 8.6), and `comparison/expectations.ts` (the one-sided `expect`
+  vocabulary, Section 4.7).
 
 ## Load-bearing invariants
 
@@ -57,6 +64,10 @@ These are the point of the project — never regress them:
 1. **One normalization vocabulary, one JSONPath subset** shared with Limen
    (spec Section 8.4): `$.field`, `$.nested.field`, `$.items[*].field`. Anything
    else is a load-time validation error and must stay in lockstep with Limen.
+   The shared fixture in `tests/fixtures/lockstep/` is a **byte-identical
+   twin** of Limen's copy — never hand-edit it out of sync with Limen, and
+   don't be surprised when CI's `lockstep-twin` job fails a PR that touches
+   merge/comparison semantics without a matching Limen-side update.
 2. **No secret value appears in any output** — redaction (header names, JSON
    paths, query params) applies to console output, JSON/JUnit reports, failure
    artifacts, and recordings. A test proves it (spec Section 16).

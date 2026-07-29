@@ -56,7 +56,9 @@ steps:
 ```
 
 OPTIONS and HEAD must not set `body` or `form` (a validation error): bodies on
-those methods are unreliable across HTTP implementations. With
+those methods are unreliable across HTTP implementations. `form` is also
+refused on `GET` (same validation error) since a GET form has no meaning;
+`body` on `GET` is unaffected and left as-is. With
 `follow_redirects: true` (the default) intermediate 30x hops are invisible — walk
 a redirect chain one step per hop with `follow_redirects: false`, replaying the
 extracted `Location` as the next step's `path`.

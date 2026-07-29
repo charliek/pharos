@@ -48,11 +48,15 @@ on each other.
 ## Status
 
 Pharos implements the full MVP from the [specification](docs/pharos_spec.md)
-(Section 14): scenario and contract loading and validation, the HTTP client, the
-comparison and normalization engine, all five comparison strategies, the four
-execution modes, hooks, recording and replay, the console/JSON/JUnit reporters,
-CLI filtering, exit codes, and a runnable example service with the seven required
-scenarios. See `CLAUDE.md` for conventions.
+(Section 14): scenario and contract loading and validation, the HTTP client
+(including a per-target cookie jar, manual redirects, and form bodies), the
+comparison and normalization engine (including the `set_cookie`/`location`
+dimensions and the one-sided `expect` vocabulary), all five comparison
+strategies, the four execution modes, hooks, recording and replay, the
+console/JSON/JUnit reporters, CLI filtering, exit codes, the `environment`
+safety model, and packaging/scaffolding (Section 19: `pharos init`, consumed as
+a pinned git dependency) — plus a runnable example service with the seven
+required scenarios. See `CLAUDE.md` for conventions.
 
 ## Requirements
 
@@ -68,7 +72,9 @@ bun install                  # install dependencies
 bun run check                # typecheck + lint + tests — the full quality gate
 ```
 
-Run the CLI through the `ftest` script:
+Run the CLI through the `ftest` script — five subcommands: `run`, `validate`,
+`record`, `check-contract`, and `init` (see the
+[CLI reference](docs/reference/cli.md) for the full list):
 
 ```bash
 bun run ftest -- --help
@@ -91,6 +97,16 @@ ALLOW_DESTRUCTIVE_TESTS=true \
 
 All seven scenarios pass; without `ALLOW_DESTRUCTIVE_TESTS` the destructive flow
 is skipped. Reports land in `reports/` (`report.json`, `junit.xml`).
+
+## Using Pharos in a service
+
+A service under migration consumes Pharos as a **bun git dependency pinned to a
+commit** (`github:charliek/pharos#<sha>`) — never a published npm package. The
+public import surface is `src/index.ts` (hook/config/scenario/contract types);
+everything else under `src/` is internal. `pharos init [dir]` scaffolds a
+runnable conformance tree — config, a stub contract, an example scenario, a
+hook registry stub, and a README — into a target repo in one step; see the
+[`init` reference](docs/reference/cli.md#init).
 
 ## Development
 

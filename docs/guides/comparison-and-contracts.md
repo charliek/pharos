@@ -22,6 +22,21 @@ remain. It runs on a deep clone of each parsed body, in spec order (§8.2):
 Object key order is canonicalized, so **key order never causes a false
 mismatch**. Normalization is deterministic and order-independent.
 
+## `set_cookie` and `location`
+
+Two further, **optional** comparison dimensions sit alongside the JSON body
+rules above — declared under `defaults`/`comparison` in the contract (or
+inline under `compare.set_cookie` / `compare.location`), not as
+`compare_headers` entries, since `Set-Cookie` is multi-valued and `Location`
+needs URL semantics. `set_cookie` pairs `Set-Cookie` entries by name
+(`compare_values: exact | presence`, with `ignore_cookies` /
+`ignore_attributes` escape hatches); `location` parses the `Location` header
+as a URL, resolving a relative value against the request first, and compares
+origin/path/query (`ignore_query_params`, `origin: exact | ignore`). Omitted
+at every layer, a dimension is not compared at all. Cookie values are never
+rendered into a mismatch — see [contract reference](../reference/contract-reference.md#set-cookie-and-location)
+for the full field list.
+
 !!! note "Timestamps are converted, not relabeled"
     `normalize_timestamps` parses the value, converts it to UTC, and truncates to
     the precision. `2024-01-01T12:30:45+05:30` and `...T07:00:45Z` normalize equal
@@ -36,7 +51,9 @@ mismatch**. Normalization is deterministic and order-independent.
 - **`explicit_expectations`** — compare the new response against literal values;
   redacted paths are still masked so a secret can't leak through an assertion.
 - **`custom`** — delegate to a named comparator; it receives **redacted** response
-  views so it cannot surface a secret into a report.
+  views so it cannot surface a secret into a report — `Set-Cookie` values are
+  masked in that view unconditionally, regardless of the scenario's
+  `sensitiveHeaders` config.
 
 ## Redaction — no secret in any output
 

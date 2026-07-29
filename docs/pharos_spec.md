@@ -145,6 +145,7 @@ pharos/
   pharos.config.ts                 # or .json — config file (Section 6)
   src/
     index.ts                       # public barrel: hook/config/scenario/contract types (Section 19.1)
+    scaffold.ts                    # `init` template generation, in-process (Section 19.2)
     cli/
       run.ts                       # run scenarios (filters, modes)
       validate.ts                  # validate scenarios + contracts
@@ -178,6 +179,7 @@ pharos/
       json-diff.ts                 # readable structural diff
       matchers.ts                  # explicit-expectation matchers
       headers.ts                   # Set-Cookie/Location parsing + comparison (Section 8.6)
+      expectations.ts              # one-sided `expect` vocabulary (Section 4.7)
       redaction.ts                 # header/path/query redaction
       result.ts                    # ComparisonResult, Mismatch types
     reporting/
@@ -406,7 +408,7 @@ compare:
 
 `set_cookie` and `location` here reuse the **same** Set-Cookie/URL parsers as the two-sided `set_cookie`/`location` comparison blocks (Section 8.6) — one implementation, two consumers. Unlike Section 8.6, these are Pharos-only, one-sided assertions: Limen never asserts one-sided, so this vocabulary carries no lockstep obligation (Section 13); only the parsing semantics (including relative-Location resolution) are shared. The name-pairing rule differs deliberately from Section 8.6's two-sided *positional* pairing within a duplicate-name group: one-sided assertions consume in response order instead, since there is no second side to position against.
 
-**`custom`** — service-specific comparison via a named comparator from the hook registry.
+**`custom`** — service-specific comparison via a named comparator from the hook registry. The comparator always receives a **redacted view** of each response: configured `redact_paths`/`sensitiveHeaders` are masked as usual, and `set-cookie`/`cookie` are *unconditionally* masked in the header/`setCookie` view regardless of the scenario's `sensitiveHeaders` config — a custom comparator can never surface a raw cookie value into `diffText`, closing off the one path Section 8.5's "no secret value appears in any output" invariant can't enforce by construction alone.
 
 ```yaml
 compare:
@@ -1023,6 +1025,7 @@ Exit `1` when any required scenario fails; exit `0` when all selected required s
 - **Separate repositories, no build-time dependency.** Either project builds and runs alone.
 - **The shared behavioral contract (Section 5) is the integration point** — a documented schema and vocabulary, *not* shared code in the MVP.
 - **One vocabulary, one JSONPath subset.** Field names, normalization semantics, and the supported JSONPath subset are identical, enforced by Section 8.4 and the shared contract format — including the `set_cookie`/`location` comparison blocks (Section 8.6) and the dual `milliseconds`/`millis` timestamp-precision spelling (Section 8.2). `check-contract` in both tools must agree.
+- **CI-enforced, not just documented.** The `lockstep-twin` job (`.github/workflows/ci.yml`) fetches Limen main's copy of the shared fixture (`tests/fixtures/lockstep/{lockstep.contract.yaml,decisions.json}`, Section 8.6) and byte-compares it against Pharos's own — any drift fails the build. A missing copy on Limen main (not yet merged there) is tolerated as bootstrap, but only once the job has confirmed the token can actually see the Limen repo, so an access failure is never mistaken for bootstrap.
 - **Workflow:** AI drafts a contract → **Pharos validates and refines** it deterministically (catching over- and under-normalization) → **Limen consumes** the refined contract unchanged for production shadow comparison and rollout.
 - **Readiness signals (bidirectional):** passing Pharos scenarios for a route is a precondition for enabling Limen shadow mode; a clean Limen shadow mismatch rate is a precondition for raising rollout; **Limen-observed mismatches become new Pharos scenarios**, closing the loop.
 - **Deferred:** a shared `normalization` package extracted from both could later replace the shared-contract-by-schema approach. Designed toward, not built now.
