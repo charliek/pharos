@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { defaultConfig, type PharosConfig } from '../src/config/config';
+import { ConfigError } from '../src/errors';
 import { runProject } from '../src/execution/run-all';
 import { buildReport, exitCodeFor } from '../src/reporting/report';
 import { replyJson, startTestServer, type TestServer } from './helpers/server';
@@ -110,5 +111,66 @@ describe('runProject — the run pipeline', () => {
     );
     expect(allowed[0].skipped).toBe(false);
     expect(allowed[0].pass).toBe(true);
+  });
+
+  it('errors instead of silently reporting nothing when --scenario names an id that does not exist', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    try {
+      await runProject(config(), { scenarioId: 'run.does-not-exist' });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).message).toContain('run.does-not-exist');
+    }
+    // Fail-closed before any request work.
+    expect(legacyServer.requests).toHaveLength(0);
+    expect(newServer.requests).toHaveLength(0);
+  });
+
+  it('errors instead of silently reporting nothing when a tag filter erases the named --scenario', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    // run.ok carries tag 'smoke'; excluding it erases the only scenario --scenario named.
+    try {
+      await runProject(config(), { scenarioId: 'run.ok', excludeTags: ['smoke'] });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      const message = (error as ConfigError).message;
+      expect(message).toContain('run.ok');
+      expect(message).toMatch(/filtered/);
+    }
+    expect(legacyServer.requests).toHaveLength(0);
+    expect(newServer.requests).toHaveLength(0);
+  });
+
+  it('mentions the parse failure when --scenario names a file that failed to parse', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    const brokenDir = resolve(here, 'fixtures/run-parse-failure/scenarios');
+    try {
+      await runProject(config({ scenario_dir: brokenDir }), { scenarioId: 'run.broken' });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      const message = (error as ConfigError).message;
+      expect(message).toContain('run.broken');
+      expect(message).toMatch(/parse/i);
+    }
+    // Fail-closed before any request work, same as the other accounting-hole cases.
+    expect(legacyServer.requests).toHaveLength(0);
+    expect(newServer.requests).toHaveLength(0);
+  });
+
+  it('still runs normally when --scenario is named and no tag filter conflicts with it', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    const results = await runProject(config(), {
+      scenarioId: 'run.ok',
+      includeTags: ['smoke'],
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0].scenarioId).toBe('run.ok');
   });
 });

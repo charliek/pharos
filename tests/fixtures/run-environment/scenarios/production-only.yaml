@@ -1,0 +1,12 @@
+version: 1
+id: env.production-only
+name: tagged for production only (the mis-tagging trap, spec Section 4.5)
+service: s
+tags: [read]
+mode: compare_live
+safety:
+  allowedEnvironments: [production]
+steps:
+  - id: get
+    request: { method: GET, path: /ok }
+    compare: { strategy: json_semantic, status: same }

@@ -1,14 +1,25 @@
 import { z } from 'zod';
+import { expectedCookieSchema, expectedLocationSchema } from '../comparison/expectations';
 import { JsonPathError, parseJsonPath } from '../comparison/jsonpath';
-import { jsonNormalizationSchema, jsonPathSchema } from '../comparison/rules';
+import {
+  dimensionHeaderConflictMessage,
+  dimensionHeaderConflicts,
+  jsonNormalizationSchema,
+  jsonPathSchema,
+  locationBlockSchema,
+  setCookieBlockSchema,
+} from '../comparison/rules';
+import { BODYLESS_METHODS, HTTP_METHODS, type HttpMethod } from '../execution/http-client';
 
 /**
- * Request methods (spec Sections 4.6 and 9). Note this is narrower than the
- * contract's `match.methods`, which also allows HEAD: a contract route may match
- * read traffic Limen shadows, but a Pharos scenario always *issues* one of these.
+ * Request methods a scenario may issue (spec Sections 4.6 and 9.1) — the client's
+ * list, so a scenario can never name a method the client cannot send. OPTIONS and
+ * HEAD are here for CORS-preflight and HEAD scenarios; both forbid a `body` and
+ * a `form` (enforced below, and again defensively in the client). The contract's
+ * `match.methods` is a separate, Limen-shared list — the two need not coincide.
  */
-export const REQUEST_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
-export type RequestMethod = (typeof REQUEST_METHODS)[number];
+export const REQUEST_METHODS = HTTP_METHODS;
+export type RequestMethod = HttpMethod;
 const requestMethodSchema = z.enum(REQUEST_METHODS);
 
 /** Add a field-addressed issue when `value` is not a supported JSONPath. */
@@ -73,9 +84,46 @@ const requestSchema = z
     query: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
     headers: z.record(z.string()).optional(),
     body: z.unknown().optional(),
+    // Urlencoded body (spec Section 9.6); `follow_redirects` defaults to true
+    // (spec Section 9.3) — both snake_case on disk, camelCase in the client.
+    form: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    follow_redirects: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((request, ctx) => {
+    if (request.body !== undefined && request.form !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['form'],
+        message: 'request.body and request.form are mutually exclusive — pick one body encoding',
+      });
+    }
+    if (BODYLESS_METHODS.has(request.method)) {
+      for (const field of ['body', 'form'] as const) {
+        if (request[field] !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `method ${request.method} must not set request.${field} (bodies on OPTIONS/HEAD are unreliable across HTTP implementations)`,
+          });
+        }
+      }
+    }
+    // A GET `form` has no meaning (there is no urlencoded-body sense for a
+    // method that carries its data in the query string) and would otherwise
+    // reach the client and `fetch` as a body on GET, producing a confusing
+    // network-layer error (spec Sections 9.1 and 9.6). `body` on GET is left
+    // alone — pre-existing, silently-ignored behavior — this only targets
+    // `form`.
+    if (request.method === 'GET' && request.form !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['form'],
+        message: 'method GET must not set request.form (a GET form has no meaning)',
+      });
+    }
+  });
 
 const EXTRACT_SOURCES = [
   'legacy.body',
@@ -84,6 +132,9 @@ const EXTRACT_SOURCES = [
   'legacy.headers',
   'new.headers',
   'response.headers',
+  'legacy.set_cookie',
+  'new.set_cookie',
+  'response.set_cookie',
 ] as const;
 const extractRuleSchema = z
   .object({
@@ -92,7 +143,8 @@ const extractRuleSchema = z
   })
   .strict()
   .superRefine((rule, ctx) => {
-    // Body extraction uses a JSONPath (subset); header extraction uses a header name.
+    // Body extraction uses a JSONPath (subset); header extraction uses a header
+    // name; set_cookie extraction uses a cookie name (spec Section 4.6).
     if (rule.from.endsWith('.body')) {
       addJsonPathIssue(ctx, ['path'], rule.path);
     }
@@ -113,15 +165,63 @@ const compareBodySchema = jsonNormalizationSchema
   })
   .strict();
 
+/**
+ * Header names that must never be asserted through the single-value `headers`
+ * map: `set-cookie` is multi-valued (the map keeps only the last one, spec
+ * Section 9.2) and `cookie` carries secrets. Use `expect.set_cookie` instead.
+ */
+const COOKIE_HEADER_NAMES = new Set(['set-cookie', 'cookie']);
+
 const expectSchema = z
   .object({
     status: z.number().int().optional(),
+    headers: z.record(z.string()).optional(),
+    header_absent: z.array(z.string()).optional(),
+    header_present: z.array(z.string()).optional(),
     body: z
       .object({ json_paths: z.record(z.unknown()).optional() })
       .strict()
       .optional(),
+    // The assertion engine's own schemas (spec Section 4.7), so the loader and
+    // the engine cannot drift apart.
+    set_cookie: z.array(expectedCookieSchema).optional(),
+    set_cookie_absent: z.array(z.string().min(1)).optional(),
+    location: expectedLocationSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((expect, ctx) => {
+    const rejectCookieHeader = (path: (string | number)[], name: string): void => {
+      if (!COOKIE_HEADER_NAMES.has(name.trim().toLowerCase())) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `expect.headers/header_absent/header_present must not name '${name}' — the single-value headers map keeps only the last Set-Cookie (spec Section 9.2); assert cookies with expect.set_cookie/set_cookie_absent`,
+      });
+    };
+    for (const name of Object.keys(expect.headers ?? {})) {
+      rejectCookieHeader(['headers', name], name);
+    }
+    for (const [index, name] of (expect.header_absent ?? []).entries()) {
+      rejectCookieHeader(['header_absent', index], name);
+    }
+    for (const [index, name] of (expect.header_present ?? []).entries()) {
+      rejectCookieHeader(['header_present', index], name);
+    }
+    for (const [index, cookie] of (expect.set_cookie ?? []).entries()) {
+      // Field *presence*, not truthiness: `{ value: abc, value_present: false }`
+      // is the same confused intent as `value_present: true` beside a value, and
+      // silently ignoring the `false` would assert something the author did not
+      // write.
+      if (cookie.value !== undefined && cookie.value_present !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['set_cookie', index, 'value_present'],
+          message:
+            'a cookie expectation asserts either an exact `value` or `value_present`, not both',
+        });
+      }
+    }
+  });
 
 const compareSchema = z
   .object({
@@ -129,12 +229,26 @@ const compareSchema = z
     status: z.literal('same').optional(),
     headers: headerRulesSchema.optional(),
     body: compareBodySchema.optional(),
+    // The two opt-in dimensions, in the contract's vocabulary verbatim (spec
+    // Section 8.6), so an inline scenario resolves them like a contract route.
+    set_cookie: setCookieBlockSchema.optional(),
+    location: locationBlockSchema.optional(),
     expect: expectSchema.optional(),
     comparator: z.string().optional(),
     args: z.record(z.unknown()).optional(),
   })
   .strict()
   .superRefine((compare, ctx) => {
+    for (const name of dimensionHeaderConflicts(compare.headers?.compare, {
+      set_cookie: Boolean(compare.set_cookie),
+      location: Boolean(compare.location),
+    })) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['headers', 'compare'],
+        message: dimensionHeaderConflictMessage(name),
+      });
+    }
     if (compare.strategy === 'subset') {
       if (!compare.body?.require_matching_paths?.length) {
         ctx.addIssue({
@@ -152,15 +266,23 @@ const compareSchema = z
           message: "strategy 'explicit_expectations' requires compare.expect",
         });
       } else {
-        const jsonPaths = compare.expect.body?.json_paths;
-        const hasStatus = compare.expect.status !== undefined;
-        const hasBody = jsonPaths !== undefined && Object.keys(jsonPaths).length > 0;
-        if (!hasStatus && !hasBody) {
+        const expect = compare.expect;
+        const jsonPaths = expect.body?.json_paths;
+        const asserts =
+          expect.status !== undefined ||
+          (jsonPaths !== undefined && Object.keys(jsonPaths).length > 0) ||
+          Object.keys(expect.headers ?? {}).length > 0 ||
+          (expect.header_absent?.length ?? 0) > 0 ||
+          (expect.header_present?.length ?? 0) > 0 ||
+          (expect.set_cookie?.length ?? 0) > 0 ||
+          (expect.set_cookie_absent?.length ?? 0) > 0 ||
+          expect.location !== undefined;
+        if (!asserts) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ['expect'],
             message:
-              "strategy 'explicit_expectations' must assert at least expect.status or a non-empty expect.body.json_paths",
+              "strategy 'explicit_expectations' must assert at least one of expect.status, expect.body.json_paths, expect.headers, expect.header_absent, expect.header_present, expect.set_cookie, expect.set_cookie_absent, expect.location",
           });
         }
         if (jsonPaths) {
@@ -227,6 +349,10 @@ function hasInlineBehavioralRules(step: z.infer<typeof stepSchema>): boolean {
   if ((headers?.compare?.length ?? 0) > 0 || (headers?.ignore?.length ?? 0) > 0) {
     return true;
   }
+  // The two dimensions are behavioral rules like any other (spec Section 8.6).
+  if (step.compare?.set_cookie !== undefined || step.compare?.location !== undefined) {
+    return true;
+  }
   const body = step.compare?.body;
   if (!body) return false;
   return INLINE_BEHAVIORAL_BODY_FIELDS.some((field) => (body[field]?.length ?? 0) > 0);
@@ -244,6 +370,9 @@ export const scenarioSchema = z
     safety: safetySchema.optional(),
     contract: z.string().min(1).optional(),
     variables: z.record(z.unknown()).optional(),
+    // Opt in to the per-target cookie jar for this scenario run (spec Sections
+    // 4.6 and 9.5); default false = no jar, the scenario propagates cookies itself.
+    cookies: z.boolean().optional(),
     setup: hooksBlockSchema.optional(),
     cleanup: hooksBlockSchema.optional(),
     steps: z.array(stepSchema).min(1),

@@ -5,9 +5,10 @@ import type { PharosConfig } from '../config/config';
 import type { ContractRegistry } from '../contract/load';
 import { resolveScenarioContractRules } from '../contract/resolve';
 import type { Scenario } from '../scenarios/schema';
+import { CookieJar } from './cookies';
 import { type HookContext, type HookFn, runHooks } from './hooks';
 import { sendRequest } from './http-client';
-import { runStep, type SendFn, type StepResult } from './step-runner';
+import { type CookieJars, runStep, type SendFn, type StepResult } from './step-runner';
 import type { VariableContext } from './variables';
 
 export interface ScenarioResult {
@@ -54,6 +55,12 @@ export async function runScenario(
   const env = deps.env ?? process.env;
   const hooks = deps.hooks ?? {};
   const ctx: VariableContext = { variables: structuredClone(scenario.variables ?? {}), env };
+  // Jars are created here and discarded with the run: one per target so legacy
+  // and new never share cookies, and none survives into the next scenario
+  // (spec Section 4.6).
+  const cookieJars: CookieJars | undefined = scenario.cookies
+    ? { legacy: new CookieJar(), new: new CookieJar() }
+    : undefined;
   const hookCtx: HookContext = {
     scenarioId: scenario.id,
     variables: ctx.variables,
@@ -93,6 +100,7 @@ export async function runScenario(
         send,
         comparators: deps.comparators,
         recordingEnabled: deps.recordingEnabled ?? config.allow_recording_updates,
+        cookieJars,
       });
       try {
         await runHooks(step.after?.hooks, stepHookCtx, hooks);

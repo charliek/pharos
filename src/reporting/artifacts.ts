@@ -21,6 +21,16 @@ export interface ArtifactInputs {
 // are omitted with a note so an unredactable secret never reaches disk.
 const NON_JSON_NOTE = '[non-JSON or scalar body omitted to avoid leaking unredactable content]';
 
+/**
+ * Header names masked in artifacts no matter what the operator configured. The
+ * cookie jar (spec Sections 4.6 and 9.5) puts session values Pharos itself
+ * collected onto the wire, and the spec pins those to "redacted in every
+ * rendered output" — so a config that drops `cookie` from `redaction.headers`
+ * must not be able to expose jar contents on disk. These are unioned in rather
+ * than replacing the configured list.
+ */
+const ALWAYS_REDACTED_HEADERS = ['cookie', 'set-cookie'];
+
 /** Redact a body for an artifact: object/array via JSON paths, anything else omitted. */
 function redactedBody(body: unknown, paths: string[]): unknown {
   if (body === undefined) return undefined;
@@ -68,11 +78,14 @@ export function writeFailureArtifacts(
 ): string {
   const dir = join(reportDir, 'artifacts', scenarioId, stepId);
   mkdirSync(dir, { recursive: true });
-  if (inputs.request) writeJson(dir, 'request.json', redactedRequest(inputs.request, redaction));
-  if (inputs.legacy)
-    writeJson(dir, 'legacy-response.json', redactedResponse(inputs.legacy, redaction));
+  const safe: RedactionTargets = {
+    ...redaction,
+    headers: [...new Set([...redaction.headers, ...ALWAYS_REDACTED_HEADERS])],
+  };
+  if (inputs.request) writeJson(dir, 'request.json', redactedRequest(inputs.request, safe));
+  if (inputs.legacy) writeJson(dir, 'legacy-response.json', redactedResponse(inputs.legacy, safe));
   if (inputs.candidate) {
-    writeJson(dir, 'new-response.json', redactedResponse(inputs.candidate, redaction));
+    writeJson(dir, 'new-response.json', redactedResponse(inputs.candidate, safe));
   }
   if (inputs.diffText) writeFileSync(join(dir, 'diff.txt'), `${inputs.diffText}\n`);
   return dir;

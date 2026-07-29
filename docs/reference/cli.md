@@ -1,6 +1,6 @@
 # CLI
 
-Pharos exposes four subcommands, reached through the `ftest` script
+Pharos exposes five subcommands, reached through the `ftest` script
 (`bun run ftest -- <command>`) or the `pharos` bin.
 
 | Command | Purpose |
@@ -9,6 +9,7 @@ Pharos exposes four subcommands, reached through the `ftest` script
 | `validate` | Validate scenarios and contracts without running them. |
 | `record` | Record legacy interactions into fixtures (explicit opt-in). |
 | `check-contract` | Validate a behavioral contract and its JSONPath compliance. |
+| `init` | Scaffold a conformance directory into a target repo. |
 
 Configuration is layered (defaults < config file < environment < CLI flags); see
 the [configuration reference](configuration.md).
@@ -69,3 +70,40 @@ JSONPath is within the [supported subset](contract-reference.md#supported-jsonpa
 It produces the **same** verdict Limen's `check-contract` would, so a contract
 can be confirmed consumable by both tools before it is wired into scenarios or
 proxy routes.
+
+## `init`
+
+```bash
+bun run ftest -- init [dir] [--service <name>] [--force]
+```
+
+Scaffolds a runnable conformance directory into `dir` (default: the current
+directory) — the starting point for a target repo that consumes Pharos as a
+pinned git dependency. It writes:
+
+| File | Contents |
+|---|---|
+| `package.json` | Minimal package: `conformance`/`validate`/`record` scripts and a **placeholder** `pharos` git dependency to pin. |
+| `pharos.config.json` | The standard directory layout, `hooks_module`, `environment: local`, and the redaction defaults. |
+| `contracts/<service>.contract.yaml` | Stub contract with one `health` route. |
+| `scenarios/smoke/health.yaml` | Example `new_only_assert` scenario referencing that route. |
+| `hooks/index.ts` | Hook registry stub importing its types from the `pharos` **package name**. |
+| `.gitignore` | Ignores `reports/` and `fixtures/recordings/`. |
+| `README.md` | How to install, run, and reason about the safety model. |
+
+| Option | Description |
+|---|---|
+| `--service <name>` | Service name used in the contract, the scenario, the contract filename, and the package name. Lowercase slug; defaults to `my-service`. |
+| `--force` | Overwrite existing files instead of refusing. |
+
+The generated tree passes `validate` unmodified. `init` is idempotent: if any
+path it needs is occupied, it names every conflict, writes **nothing**, and exits
+non-zero — `--force` overwrites existing files. Occupation is judged by type: a
+directory the scaffold needs that exists as a file, or a generated file path that
+exists as a directory, is refused even with `--force` (resolving it needs a
+delete, which `init` never does). Scaffolding into an existing, non-empty
+directory is fine as long as nothing the scaffold needs collides.
+
+Because Pharos resolves its config and directories relative to the current
+working directory, the generated suite must be run from the scaffold root — see
+its README.

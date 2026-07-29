@@ -8,7 +8,14 @@ function resp(
   json: unknown,
   headers: Record<string, string> = {},
 ): HttpResponseRecord {
-  return { status, headers, bodyText: JSON.stringify(json), bodyJson: json, durationMs: 1 };
+  return {
+    status,
+    headers,
+    setCookie: [],
+    bodyText: JSON.stringify(json),
+    bodyJson: json,
+    durationMs: 1,
+  };
 }
 
 function rulesWith(patch: Partial<ComparisonRules>): ComparisonRules {
@@ -241,6 +248,29 @@ describe('compare — custom', () => {
     });
     expect(fail.pass).toBe(false);
     expect(fail.diffText).toContain('nope');
+  });
+
+  it('masks setCookie in a custom comparator view even when sensitiveHeaders omits set-cookie', () => {
+    let observedSetCookie: unknown;
+    const candidate: HttpResponseRecord = {
+      ...resp(200, {}),
+      setCookie: ['sid=SUPER-SECRET; Path=/; HttpOnly'],
+    };
+    const result = compare({
+      strategy: 'custom',
+      rules,
+      candidate,
+      comparator: (ctx) => {
+        observedSetCookie = ctx.candidate.setCookie;
+        return [];
+      },
+      // Deliberately does not include 'set-cookie' (or 'cookie') — proving the
+      // comparator view masks Set-Cookie unconditionally, not just when the
+      // scenario happens to configure it as sensitive.
+      sensitiveHeaders: [],
+    });
+    expect(observedSetCookie).toEqual(['***REDACTED***']);
+    expect(JSON.stringify(result)).not.toContain('SUPER-SECRET');
   });
 
   it('hands a custom comparator redacted responses so it cannot leak secrets', () => {

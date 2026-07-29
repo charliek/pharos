@@ -111,6 +111,23 @@ export interface ResponsesForExtraction {
   candidate?: HttpResponseRecord;
 }
 
+/**
+ * The value of a cookie by name from a lossless `setCookie` capture (spec
+ * Section 4.6). Only the leading `name=value` pair is read — attributes are
+ * asserted, never extracted. The last occurrence wins (RFC 6265), and a name
+ * that is not set yields undefined, exactly like a missing header.
+ */
+function setCookieValue(setCookie: string[], name: string): string | undefined {
+  let found: string | undefined;
+  for (const header of setCookie) {
+    const pair = header.split(';', 1)[0];
+    const eq = pair.indexOf('=');
+    if (eq === -1) continue;
+    if (pair.slice(0, eq).trim() === name) found = pair.slice(eq + 1).trim();
+  }
+  return found;
+}
+
 /** Resolve an extract rule against the available responses (spec Section 4.6). */
 export function extractValue(
   rule: { from: string; path: string },
@@ -140,6 +157,9 @@ export function extractValue(
   }
   if (kind === 'headers') {
     return response.headers[rule.path.toLowerCase()];
+  }
+  if (kind === 'set_cookie') {
+    return setCookieValue(response.setCookie, rule.path);
   }
   const matches = getAtPath(response.bodyJson, parseJsonPath(rule.path));
   if (matches.length === 0) return undefined;

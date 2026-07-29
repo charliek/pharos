@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { VERSION } from '../version';
 import { registerCheckContractCommand } from './check-contract';
+import { registerInitCommand } from './init';
 import { registerRecordCommand } from './record';
 import { registerRunCommand } from './run';
 import { registerValidateCommand } from './validate';
@@ -24,6 +25,7 @@ export function buildProgram(): Command {
   registerValidateCommand(program);
   registerRecordCommand(program);
   registerCheckContractCommand(program);
+  registerInitCommand(program);
 
   return program;
 }

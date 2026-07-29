@@ -29,6 +29,8 @@ export function renderConsoleReport(report: TestRunReport): string {
       if (step.pass) continue;
       lines.push(`    step '${step.stepId}': ${step.summary ?? step.error ?? 'failed'}`);
       if (step.diffText) lines.push(indent(step.diffText, 6));
+      // Say so when the list was clipped, or the diff reads as the whole story.
+      if (step.diffTruncated) lines.push('      … more differences were truncated');
       if (step.artifactDir) lines.push(`      artifacts: ${step.artifactDir}`);
     }
   }

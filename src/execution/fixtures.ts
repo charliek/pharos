@@ -5,7 +5,7 @@ import { redactJsonValue, redactQuery, redactUrl } from '../comparison/redaction
 import type { RedactionTargets } from '../config/config';
 import { readDocumentFile } from '../document';
 import { ValidationError, validateWithSchema } from '../errors';
-import type { HttpRequestSpec, HttpResponseRecord } from './http-client';
+import { HTTP_METHODS, type HttpRequestSpec, type HttpResponseRecord } from './http-client';
 
 /**
  * Recording fixtures (spec Section 10). A recording captures a legacy
@@ -16,7 +16,7 @@ import type { HttpRequestSpec, HttpResponseRecord } from './http-client';
 
 const recordingRequestSchema = z
   .object({
-    method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+    method: z.enum(HTTP_METHODS),
     path: z.string(),
     query: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
     headers: z.record(z.string()).optional(),
@@ -25,10 +25,18 @@ const recordingRequestSchema = z
   })
   .strict();
 
+/**
+ * The on-disk response shape (spec Sections 9 and 10.1). It deliberately differs
+ * from the in-memory `HttpResponseRecord`: `set_cookie` is snake_case (the
+ * recording format's convention) and **optional**, since every recording made
+ * before cookie capture existed has none — absent means "no cookie data was
+ * captured", not "no cookies were set". Re-record to add it.
+ */
 const recordingResponseSchema = z
   .object({
     status: z.number(),
     headers: z.record(z.string()),
+    set_cookie: z.array(z.string()).optional(),
     bodyText: z.string(),
     bodyJson: z.unknown().optional(),
     durationMs: z.number(),
@@ -124,6 +132,9 @@ export function buildRecording(params: BuildRecordingParams): Recording {
     response: {
       status: params.response.status,
       headers: keepSafeHeaders(params.response.headers, safe),
+      // Cookie values are secrets: they are persisted only when the scenario
+      // declares set-cookie safe, the same discipline keepSafeHeaders applies.
+      ...(safe.has('set-cookie') ? { set_cookie: params.response.setCookie } : {}),
       bodyText,
       bodyJson,
       durationMs: params.response.durationMs,
@@ -172,7 +183,12 @@ export function loadRecording(fixtureDir: string, fixturePath: string): Recordin
   return validateWithSchema(recordingSchema, readDocumentFile(full), full);
 }
 
-/** The recorded legacy response, as an HttpResponseRecord for comparison. */
+/**
+ * The recorded legacy response, as an HttpResponseRecord for comparison. Maps
+ * the on-disk optional `set_cookie` back to the required in-memory `setCookie`;
+ * a recording without it replays with no cookie data (spec Section 10.1).
+ */
 export function recordingResponse(recording: Recording): HttpResponseRecord {
-  return recording.response;
+  const { set_cookie: setCookie = [], ...response } = recording.response;
+  return { ...response, setCookie };
 }

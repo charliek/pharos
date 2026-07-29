@@ -17,6 +17,8 @@ export interface ReportStep {
   summary?: string;
   mismatches?: Mismatch[];
   diffText?: string;
+  /** A bounded mismatch list was clipped, so the diff is a sample (spec Section 8.6). */
+  diffTruncated?: boolean;
   artifactDir?: string;
   recordingPath?: string;
   recordingSkipped?: boolean;
@@ -50,6 +52,7 @@ function toReportStep(step: ScenarioResult['steps'][number]): ReportStep {
     summary: step.comparison?.summary,
     mismatches: step.comparison?.mismatches,
     diffText: step.comparison?.diffText,
+    diffTruncated: step.comparison?.diffTruncated,
     artifactDir: step.artifactDir,
     recordingPath: step.recordingPath,
     recordingSkipped: step.recordingSkipped,

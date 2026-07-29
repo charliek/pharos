@@ -181,3 +181,160 @@ steps:
     }
   });
 });
+
+describe('merge: list de-duplication and the new dimensions (spec §5.4, §8.6)', () => {
+  const CONTRACT = `version: 1
+service: s
+defaults:
+  compare_headers: ["content-type"]
+  json:
+    ignore_paths: ["$.a", "$.b"]
+    sort_arrays:
+      - { path: "$.items", key: id }
+  set_cookie:
+    ignore_cookies: ["csrf_token"]
+routes:
+  - id: dedup
+    match: { methods: [GET, OPTIONS], path_template: /r }
+    comparison:
+      compare_headers: ["content-type", "etag"]
+      json:
+        ignore_paths: ["$.a", "$.c"]
+        sort_arrays:
+          - { key: id, path: "$.items" }
+      set_cookie:
+        ignore_cookies: ["csrf_token", "hint"]
+        compare_values: presence
+  - id: plain
+    match: { methods: [GET], path_template: /p }
+`;
+
+  function rulesFor(routeId: string) {
+    const contract = loadContractFromText(CONTRACT, 'c.yaml');
+    const route = contract.routes.find((candidate) => candidate.id === routeId);
+    if (!route) throw new Error(`no route ${routeId}`);
+    return mergeContractRoute(contract, route);
+  }
+
+  it('concatenates then de-duplicates, preserving the first occurrence', () => {
+    const rules = rulesFor('dedup');
+    expect(rules.compare_headers).toEqual(['content-type', 'etag']);
+    expect(rules.json.ignore_paths).toEqual(['$.a', '$.b', '$.c']);
+    // Structured entries de-duplicate by whole value, independent of key order.
+    expect(rules.json.sort_arrays).toEqual([{ path: '$.items', key: 'id' }]);
+    expect(rules.set_cookie?.ignore_cookies).toEqual(['csrf_token', 'hint']);
+  });
+
+  it('overrides scalars inside a dimension block while lists still merge', () => {
+    expect(rulesFor('dedup').set_cookie).toEqual({
+      compare: true,
+      ignore_cookies: ['csrf_token', 'hint'],
+      ignore_attributes: [],
+      compare_values: 'presence',
+    });
+  });
+
+  it('leaves a dimension absent when no layer declared it, and inherits one that is', () => {
+    const rules = rulesFor('plain');
+    expect(rules.location).toBeUndefined();
+    expect(rules.set_cookie).toEqual({
+      compare: true,
+      ignore_cookies: ['csrf_token'],
+      ignore_attributes: [],
+      compare_values: 'exact',
+    });
+  });
+
+  it('resolves a present-but-empty block to its normative defaults', () => {
+    const contract = loadContractFromText(
+      `version: 1
+service: s
+routes:
+  - id: r
+    match: { methods: [GET], path_template: /r }
+    comparison:
+      location: {}
+`,
+      'c.yaml',
+    );
+    expect(mergeContractRoute(contract, contract.routes[0]).location).toEqual({
+      compare: true,
+      ignore_query_params: [],
+      origin: 'exact',
+    });
+  });
+
+  it('builds the dimensions from an inline scenario compare block', () => {
+    const rules = inlineComparisonRules({
+      strategy: 'json_semantic',
+      set_cookie: { ignore_attributes: ['Expires'] },
+      location: { origin: 'ignore' },
+    } as ScenarioCompare);
+    expect(rules.set_cookie).toEqual({
+      compare: true,
+      ignore_cookies: [],
+      ignore_attributes: ['Expires'],
+      compare_values: 'exact',
+    });
+    expect(rules.location?.origin).toBe('ignore');
+  });
+});
+
+describe('compare_headers conflict with a dimension block (spec §8.6)', () => {
+  function issues(yaml: string) {
+    try {
+      loadContractFromText(yaml, 'c.yaml');
+      return [];
+    } catch (error) {
+      if (error instanceof ValidationError) return error.issues;
+      throw error;
+    }
+  }
+
+  it('rejects a route listing set-cookie while the block is present', () => {
+    const found = issues(`version: 1
+service: s
+routes:
+  - id: r
+    match: { methods: [GET], path_template: /r }
+    comparison:
+      compare_headers: ["Set-Cookie "]
+      set_cookie: {}
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0].path).toBe('routes[0].comparison.compare_headers');
+    expect(found[0].message).toMatch(/set_cookie/);
+  });
+
+  it('rejects the conflict across layers, and reports a defaults conflict once', () => {
+    const found = issues(`version: 1
+service: s
+defaults:
+  compare_headers: ["location"]
+routes:
+  - id: a
+    match: { methods: [GET], path_template: /a }
+    comparison:
+      location: { origin: ignore }
+  - id: b
+    match: { methods: [GET], path_template: /b }
+    comparison:
+      location: {}
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0].path).toBe('defaults.compare_headers');
+  });
+
+  it('allows the header when no dimension block is present', () => {
+    expect(
+      issues(`version: 1
+service: s
+routes:
+  - id: r
+    match: { methods: [GET], path_template: /r }
+    comparison:
+      compare_headers: ["location", "set-cookie"]
+`),
+    ).toEqual([]);
+  });
+});

@@ -1,0 +1,4 @@
+{
+  "environment": "staging",
+  "production_url_patterns": ["*.example.com"]
+}

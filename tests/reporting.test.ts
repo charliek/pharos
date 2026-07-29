@@ -48,6 +48,7 @@ describe('buildReport', () => {
               legacy: {
                 status: 200,
                 headers: { authorization: 'Bearer SECRET' },
+                setCookie: [],
                 bodyText: '{"token":"SECRET"}',
                 bodyJson: { token: 'SECRET' },
                 durationMs: 1,
@@ -55,6 +56,7 @@ describe('buildReport', () => {
               candidate: {
                 status: 200,
                 headers: {},
+                setCookie: [],
                 bodyText: '{}',
                 bodyJson: {},
                 durationMs: 1,
@@ -126,7 +128,13 @@ describe('renderJunitXml', () => {
             {
               stepId: 's',
               pass: false,
-              comparison: { pass: false, summary: 'm', mismatches: [], diffText: 'a<b' },
+              comparison: {
+                pass: false,
+                summary: 'm',
+                mismatches: [],
+                diffText: 'a<b',
+                diffTruncated: true,
+              },
             },
           ],
         }),
@@ -141,6 +149,8 @@ describe('renderJunitXml', () => {
     expect(xml).toContain('skipped="1"');
     expect(xml).toContain('f&lt;&amp;&gt;');
     expect(xml).toContain('a&lt;b');
+    // A clipped mismatch list says so in CI, not only in the JSON report.
+    expect(xml).toContain('more differences were truncated');
     expect(xml).toContain('<skipped');
   });
 });

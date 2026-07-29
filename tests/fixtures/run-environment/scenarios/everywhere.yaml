@@ -1,0 +1,12 @@
+version: 1
+id: env.everywhere
+name: tagged for every environment
+service: s
+tags: [read, smoke]
+mode: compare_live
+safety:
+  allowedEnvironments: [local, ci, staging, production]
+steps:
+  - id: get
+    request: { method: GET, path: /ok }
+    compare: { strategy: json_semantic, status: same }
