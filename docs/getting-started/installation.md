@@ -74,7 +74,7 @@ root.
 
 ## Documentation site (optional)
 
-The documentation you are reading builds with `mkdocs-material`, managed with
+The documentation you are reading builds with [Zensical](https://zensical.org), managed with
 [uv](https://docs.astral.sh/uv/):
 
 ```bash

@@ -124,7 +124,7 @@ and the Vitest suite on every push and PR.
 
 ## Documentation
 
-The full site lives under `docs/` and builds with `mkdocs-material`
+The full site lives under `docs/` and builds with [Zensical](https://zensical.org)
 (`make docs-serve` → http://127.0.0.1:7072):
 
 - **Getting started** — installation, quickstart

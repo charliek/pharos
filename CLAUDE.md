@@ -22,7 +22,9 @@ proxy that **consumes** the same behavioral contract Pharos refines.
   uses `pool: 'forks'` because worker threads can be flaky under bun.
 - Lint + format is **Biome**; types are checked separately with `tsc --noEmit`
   (Biome does not type-check).
-- Docs tooling is Python via `uv` (`pyproject.toml`, `mkdocs-material`).
+- Docs tooling is Python via `uv` (`pyproject.toml`, `zensical` + the shared
+  [stridelabs-docs-theme](https://github.com/charliek/stridelabs-docs-theme)
+  package, pinned by tag). Not part of the Rust/TS gates.
 
 ## Quality gate (run before every commit)
 
