@@ -53,7 +53,7 @@ See `CLAUDE.md` for the full conventions.
 
 ## Documentation
 
-The site builds with `mkdocs-material` via [uv](https://docs.astral.sh/uv/):
+The site builds with [Zensical](https://zensical.org) via [uv](https://docs.astral.sh/uv/):
 
 ```bash
 make docs-serve     # http://127.0.0.1:7072

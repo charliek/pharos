@@ -21,7 +21,7 @@ Configuration is layered, each source overriding the previous:
 | `default_timeout_ms` | `DEFAULT_TIMEOUT_MS` | `10000` | Per-request timeout. |
 | `default_headers` | — | `{}` | Headers added to every request. |
 | `output_mode` | `PHAROS_MODE` | `local` | `local` or `ci`. Governs reporting/recording conventions only. |
-| `environment` | `PHAROS_ENVIRONMENT` | `local` | `local`, `ci`, `staging`, or `production`. The safety-relevant environment `safety.allowedEnvironments` is compared against — independent of `output_mode`. See [Safety gates](reporting-and-ci.md#safety-gates). |
+| `environment` | `PHAROS_ENVIRONMENT` | `local` | `local`, `ci`, `staging`, or `production`. The safety-relevant environment `safety.allowedEnvironments` is compared against — independent of `output_mode`. See [Safety gates](../guides/reporting-and-ci.md#safety-gates). |
 | `production_url_patterns` | — | `[]` | Host globs (e.g. `*.example.com`) matched against the lowercase hostname of each base URL. A match while `environment != production` aborts the run before any request. |
 | `allow_destructive_tests` | `ALLOW_DESTRUCTIVE_TESTS` | `false` | Run destructive scenarios. |
 | `allow_production_guard_override` | `ALLOW_PRODUCTION_GUARD_OVERRIDE` | `false` | Run scenarios requiring the production guard. |
