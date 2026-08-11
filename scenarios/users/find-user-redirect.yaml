@@ -1,0 +1,41 @@
+version: 1
+id: users.find-user-redirect
+name: Find a user by name and follow the relative redirect
+description: >
+  GET /users/find redirects (303) to the found user's canonical URL with a
+  relative Location — legacy and new run on different origins, so the
+  contract's location dimension ignores origin (spec Section 8.6) while still
+  comparing the path two-sided. A second request against the same endpoint
+  asserts the Location one-sided via `expect.location`, path-level only.
+service: user-service
+tags: [read, migration-ready]
+mode: compare_live
+contract: "../../contracts/user-service.contract.yaml#find-user-redirect"
+variables:
+  name: Ada Lovelace
+steps:
+  - id: find-redirect
+    name: Compare the redirect two-sided, ignoring origin
+    request:
+      method: GET
+      path: /users/find
+      query:
+        name: "{{ variables.name }}"
+      follow_redirects: false
+    compare:
+      strategy: json_semantic
+      status: same
+  - id: find-redirect-expect
+    name: Assert the redirect's path one-sided
+    request:
+      method: GET
+      path: /users/find
+      query:
+        name: "{{ variables.name }}"
+      follow_redirects: false
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 303
+        location:
+          path: /users/user-123

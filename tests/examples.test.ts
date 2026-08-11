@@ -22,8 +22,8 @@ let newService: MockServer | undefined;
 let reportDir: string;
 
 beforeEach(async () => {
-  legacy = await startUserApiServer();
-  newService = await startUserApiServer();
+  legacy = await startUserApiServer('legacy');
+  newService = await startUserApiServer('new');
   reportDir = mkdtempSync(join(tmpdir(), 'pharos-examples-'));
 });
 
@@ -57,8 +57,14 @@ describe('example scenarios', () => {
     const results = await runProject(exampleConfig(), { env });
     const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z');
 
-    // The seven required example scenarios are present.
-    expect(report.summary.total).toBeGreaterThanOrEqual(7);
+    // The seven required example scenarios (spec Section 15.2), plus the
+    // cookie-jar/set_cookie session flow and the location-comparison redirect
+    // flow (spec Section 15.2, cookie jar / set_cookie / location rows).
+    expect(report.summary.total).toBeGreaterThanOrEqual(9);
+    const scenarioIds = report.scenarios.map((s) => s.scenarioId);
+    expect(scenarioIds).toEqual(
+      expect.arrayContaining(['users.session-login-profile', 'users.find-user-redirect']),
+    );
     // None fail (a couple may be skipped only if guards apply — here none do).
     const failed = report.scenarios.filter((s) => !s.pass && !s.skipped);
     expect(failed.map((s) => `${s.scenarioId}: ${s.error ?? 'mismatch'}`)).toEqual([]);

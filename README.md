@@ -55,7 +55,7 @@ dimensions and the one-sided `expect` vocabulary), all five comparison
 strategies, the four execution modes, hooks, recording and replay, the
 console/JSON/JUnit reporters, CLI filtering, exit codes, the `environment`
 safety model, and packaging/scaffolding (Section 19: `pharos init`, consumed as
-a pinned git dependency) — plus a runnable example service with the seven
+a pinned git dependency) — plus a runnable example service with the nine
 required scenarios. See `CLAUDE.md` for conventions.
 
 ## Requirements
@@ -84,7 +84,7 @@ bun run ftest -- check-contract contracts/user-service.contract.yaml
 
 ### Try the example end to end
 
-The repo ships a runnable example — a mock `user-service`, a contract, the seven
+The repo ships a runnable example — a mock `user-service`, a contract, the nine
 required scenarios, hooks, and a recording. Bring up two mock instances and run:
 
 ```bash
@@ -95,7 +95,7 @@ ALLOW_DESTRUCTIVE_TESTS=true \
   bun run ftest -- run
 ```
 
-All seven scenarios pass; without `ALLOW_DESTRUCTIVE_TESTS` the destructive flow
+All nine scenarios pass; without `ALLOW_DESTRUCTIVE_TESTS` the destructive flow
 is skipped. Reports land in `reports/` (`report.json`, `junit.xml`).
 
 ## Using Pharos in a service

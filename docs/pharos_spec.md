@@ -1084,6 +1084,15 @@ Each phase ends with passing harness tests and a runnable CLI. Build incremental
 - `POST /users`
 - `GET /users/:id` not-found case
 - `POST /users` validation-error case
+- `POST /login` — accepts any JSON credentials fixture; sets a `session`
+  cookie (spec Sections 4.6, 8.6, and 9.5) whose value differs per instance
+  and whose `SameSite` attribute differs cosmetically per instance.
+- `GET /profile` — 200 with a small JSON body given a valid session cookie,
+  else 401.
+- `GET /users/find?name=` — a redirect endpoint: 303 with a **relative**
+  `Location` header to the matching user, so the `location` contract
+  dimension's `origin: ignore` (Section 8.6) is load-bearing across the two
+  instances' different origins.
 
 ### 15.2 Required example scenarios
 
@@ -1094,6 +1103,15 @@ Each phase ends with passing harness tests and a runnable CLI. Build incremental
 5. `users.replay-get-user-recording` — replay against a recording.
 6. `users.new-only-healthcheck` — new-only explicit assertion.
 7. `users.create-then-fetch-destructive` — multi-step create/read/delete flow guarded as destructive.
+8. `users.session-login-profile` — `cookies: true` jar flow: a login compared
+   two-sided through the contract's `set_cookie` dimension (presence-level
+   value, `SameSite` ignored), a second login asserted one-sided via
+   `expect.set_cookie`, and a profile read asserted with an explicit
+   `expect.status` (a two-sided "same" status would let a broken jar's
+   identical 401s pass unnoticed).
+9. `users.find-user-redirect` — a `follow_redirects: false` redirect compared
+   two-sided through the contract's `location` dimension (`origin: ignore`)
+   and, in a second step, asserted one-sided via `expect.location`.
 
 Plus an example scenario demonstrating **ignored dynamic response fields** (may be folded into #1 via the contract).
 

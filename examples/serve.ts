@@ -8,5 +8,5 @@ import { listenOnPort } from './mock-service';
  *   LEGACY_BASE_URL=http://127.0.0.1:3001 NEW_BASE_URL=http://127.0.0.1:3002 \
  *     bun run ftest -- run
  */
-listenOnPort(3001);
-listenOnPort(3002);
+listenOnPort(3001, 'legacy');
+listenOnPort(3002, 'new');

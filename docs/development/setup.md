@@ -28,7 +28,7 @@ Makefile (`make help` lists every target). Lint and format are handled by
 ## Running the example end to end
 
 The repository ships a runnable example — a mock `user-service`, a contract, the
-seven required scenarios, hooks, and a recording:
+nine required scenarios, hooks, and a recording:
 
 ```bash
 bun run example:serve &     # legacy on :3001, new on :3002
@@ -38,7 +38,7 @@ ALLOW_DESTRUCTIVE_TESTS=true \
   bun run ftest -- run
 ```
 
-All seven scenarios pass; without `ALLOW_DESTRUCTIVE_TESTS` the destructive flow
+All nine scenarios pass; without `ALLOW_DESTRUCTIVE_TESTS` the destructive flow
 is skipped.
 
 ## Conventions
