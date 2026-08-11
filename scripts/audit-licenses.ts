@@ -53,8 +53,13 @@ function realpathOrNull(path: string): string | null {
 function readdirOrEmpty(dir: string): string[] {
   try {
     return readdirSync(dir);
-  } catch {
-    return [];
+  } catch (err) {
+    // Only a genuinely missing directory is empty evidence; any other error
+    // (permissions, I/O) is missing evidence, and an audit that cannot read
+    // its input must fail rather than report a smaller, cleaner world.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    console.error(`audit: cannot read ${dir}: ${String(err)}`);
+    process.exit(1);
   }
 }
 
@@ -91,9 +96,14 @@ function collectPackage(dir: string, visited: Set<string>, out: Map<string, Pack
         version: pkg.version ?? 'unknown',
         license: typeof pkg.license === 'string' ? pkg.license.trim() : '',
       });
-    } catch {
-      // Not a package directory (no/invalid package.json) -- still walk
-      // any nested node_modules it contains.
+    } catch (err) {
+      // A missing package.json just means this directory is not a package --
+      // still walk any nested node_modules it contains. An existing manifest
+      // we cannot read or parse is missing evidence, and fails the audit.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error(`audit: cannot read ${pkgJsonPath}: ${String(err)}`);
+        process.exit(1);
+      }
     }
   }
   walk(join(real, 'node_modules'), visited, out);
