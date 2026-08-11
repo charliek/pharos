@@ -129,6 +129,11 @@ compare:
 `set_cookie_absent`, which read the lossless capture. Reach for `expect` on the auth state a
 flow depends on, on redirect targets, and always in `new_only_assert` (no second side exists).
 
+Reading an `expect` failure's diff: the report reuses the two-sided renderer, so its
+`legacy:` column holds your **expected** value and `new:` holds the **actual** response —
+it is not a legacy-vs-new drift. Check the step's saved response artifacts under `reports/`
+before chasing one.
+
 ## Safety gates
 
 - `safety.destructive: true` on any scenario that writes or deletes; it runs only with
@@ -163,6 +168,8 @@ package, never a floating branch ref:
 bunx github:charliek/pharos#<commit-sha> init . --service my-service
 ```
 
+Get the SHA to pin from the pharos checkout (`git rev-parse HEAD`) or the repo's commit page.
+
 That writes `package.json` (scripts `conformance`/`validate`/`record` plus a placeholder
 `"pharos": "github:charliek/pharos#REPLACE_WITH_PINNED_COMMIT_SHA"`), `pharos.config.json`, a
 stub contract, an example `new_only_assert` scenario, `hooks/index.ts`, `.gitignore`, and a
@@ -173,6 +180,10 @@ generated tree passes unmodified. `init` refuses to clobber (`--force` overwrite
 [reference/configuration](https://charliek.github.io/pharos/reference/configuration/).
 
 ## Worked examples to copy from (in the pharos checkout)
+
+The example mocks seed exactly two users, `user-123` and `user-456` (see
+`examples/mock-service.ts`) — a scenario probing any other id gets an honest 404 from both
+sides.
 
 - `scenarios/users/session-login-profile.yaml` — `cookies: true` jar, a two-sided `set_cookie`
   comparison through the contract's `login` route, and a profile step pinned with
