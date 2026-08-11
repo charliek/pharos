@@ -22,6 +22,11 @@ HTTP APIs, issues the same request to each, and compares the responses — turni
 "does the rewrite behave like the original?" into a test that either passes or
 fails, locally and in CI, *before* users depend on the new service.
 
+Because it speaks only HTTP, nothing in Pharos is specific to the language or
+framework either side is written in. The first wave it targets is Kotlin/Java
+services on Ratpack being rewritten in Rust or Kotlin Spring Boot, but a service
+written in anything that serves HTTP is a valid target.
+
 ```
             ┌──────────────── pharos ────────────────┐
   scenario  │                                         │───▶  legacy  (reference)

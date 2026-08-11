@@ -25,7 +25,11 @@ migration.**
 Pharos treats both systems as black-box HTTP APIs. It issues the same request to
 `legacy` and `new`, normalizes the responses with a shared
 [behavioral contract](docs/pharos_spec.md), and compares them — turning "does
-the rewrite behave like the original?" into a test that passes or fails. It can:
+the rewrite behave like the original?" into a test that passes or fails. Because
+it speaks only HTTP, nothing in Pharos is specific to the language or framework
+either side is written in — the first wave it targets is Kotlin/Java services on
+Ratpack being rewritten in Rust or Kotlin Spring Boot, but a service written in
+anything that serves HTTP is a valid target. It can:
 
 - **Compare live** — call both services and diff the responses semantically,
   ignoring incidental differences (request IDs, timestamps, key order) declared

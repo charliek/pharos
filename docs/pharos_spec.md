@@ -1073,6 +1073,19 @@ Each phase ends with passing harness tests and a runnable CLI. Build incremental
 - Mock endpoints (Section 15.1); the required example scenarios (Section 15.2) and example contract; README that runs from a fresh checkout.
 - **Done when:** example scenarios validate and run against the mock endpoints; README instructions verified from a clean checkout.
 
+### Post-Phase 8 increments
+
+Work that landed after the MVP phases above. Each increment adds a dimension or a guard to the existing pipeline (Section 3.3) rather than reshaping it, and each is specified in place — the rows point at the section that owns the increment, they do not restate it.
+
+| Increment | Specified in |
+|---|---|
+| Per-target cookie jar (`cookies: true`) | Section 9.5; scenario opt-in in Section 4.6 |
+| `set_cookie` and `location` comparison dimensions | Section 8.6 |
+| The one-sided `expect` vocabulary (`header_present`/`header_absent`, `set_cookie`/`set_cookie_absent`, `location`) | Section 4.7 |
+| The `environment` model and the `production_url_patterns` guard | Section 12; fields in Section 6.2 |
+| Packaging as a pinned git dependency and `pharos init` scaffolding | Section 19 |
+| The `lockstep-twin` CI job byte-comparing the shared fixture against Limen main | Section 13 |
+
 ---
 
 ## 15. Example Service and Scenarios
@@ -1243,3 +1256,16 @@ Scaffolds a runnable conformance directory into a target repo (default `dir`: cu
 ### 19.3 Cwd-based config resolution
 
 Pharos resolves its config file and the directories within it relative to the **current working directory** at invocation time (Section 6.1). `pharos init` therefore writes paths relative to the scaffold root, and the scaffold's README documents that the runner (the target repo's `conformance`-style script) must be invoked from that root — not from the target repo's own root if the scaffold lives in a subdirectory.
+---
+
+## Appendix A. Streaming and SSE Endpoints Are Out of Scope
+
+Live streaming endpoints — server-sent events, chunked feeds, any response whose body is not intended to end — are **outside Pharos scenario scope entirely**. This is a scope boundary, not a gap awaiting a mode.
+
+**Why the executor cannot assert one.** The HTTP client reads the full response body before it builds a response record: `sendRequest` awaits `fetch`, then awaits `response.text()`, and only then returns an `HttpResponseRecord` (Section 9). Nothing downstream — extraction, normalization, comparison, expectations — sees a response until that read completes. Against an unending body the read never completes, so the request's `AbortController` fires at the timeout and the step produces the timeout error record (status `0`, empty `bodyText`, `error.type: 'timeout'`) instead of an assertable response. That record is honest about what happened and useless as a behavioral assertion: it describes Pharos's own timeout, not the service's streaming behavior.
+
+**No headers-only mode.** Returning a record after the response head, leaving the body undrained, would be a material scope increase — a second response shape that every strategy, the recording format (Section 10.1), and the reporters would have to understand, plus stream lifetime management the harness deliberately does not have. It is **deferred**, not planned.
+
+**Where such routes belong.** They belong to Limen's relay and observe side (Section 13): unsampled traffic is proxied on the streaming path without buffering, observe mode profiles these routes under `length_missing` (a response with no `Content-Length` yields no stability evidence), and a request selected for comparison whose response is `text/event-stream` is comparison-skipped by content type before a byte is buffered, so the client keeps streaming. A sampled response that streams without declaring itself SSE is buffered only up to Limen's size and time bounds, then demoted back to streaming with the comparison skipped.
+
+**What a scenario covers instead.** The service's non-streaming metadata endpoints — the handshake, subscription, or status routes around the stream — are ordinary request/response routes and are compared normally. No new vocabulary is introduced for any of this.
