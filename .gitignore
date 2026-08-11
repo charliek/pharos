@@ -23,6 +23,9 @@ __pycache__/
 # Local runtime state
 /pharos.local.config.json
 
+# Local secrets (no .env.example exists that needs an exception)
+.env*
+
 # Editor / OS
 .DS_Store
 .idea/
@@ -30,5 +33,10 @@ __pycache__/
 *.swp
 *~
 
-# Claude Code local state
-.claude/
+# Claude Code local state -- everything under .claude/ is ignored except the
+# checked-in skills. The chain must be un-excluded directory by directory: git
+# never descends into an excluded directory, so a `!` rule on a file inside one
+# would never be reached.
+/.claude/*
+!/.claude/skills/
+

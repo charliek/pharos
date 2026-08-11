@@ -64,6 +64,33 @@ names and query params are masked on every output surface; and the operator's
 `redaction.json_paths` augment the contract's `redact_paths` at run time. A test
 proves no configured secret reaches any artifact.
 
+## Out of scope: streaming endpoints
+
+Live streaming endpoints — server-sent events, chunked feeds, any response whose
+body is not meant to end — are **outside Pharos scenario scope entirely**.
+
+The reason is in the executor: the HTTP client awaits `fetch`, then awaits the
+**full** response body, and only then builds the response record a step can
+compare or extract from. Against an unending body that read never returns, so the
+request timeout fires and the step yields a timeout record — status `0`, empty
+body, `error.type: 'timeout'` — which describes Pharos's own timeout, not the
+service's behavior. There is no honest assertion to make against it. Pharos has
+no headers-only execution mode either, and adding one is a **material scope
+increase** (a second response shape for every strategy, the recording format, and
+the reporters, plus stream lifetime management) — deliberately deferred, not
+planned.
+
+Those routes belong to the migration proxy's relay and observe side: Limen
+proxies unsampled traffic on the streaming path without buffering, profiles the
+routes in observe mode under `length_missing` (no `Content-Length`, so no
+stability evidence), and comparison-skips a sampled `text/event-stream` response
+by content type before buffering a byte (other sampled length-less responses
+buffer only within Limen's size and time bounds before demoting back to
+streaming). What a scenario *can* cover is the service's **non-streaming**
+endpoints around the stream — the handshake, subscription, or status routes —
+which are ordinary request/response routes compared like any other. See Appendix
+A of the [Pharos specification](../pharos_spec.md).
+
 ## Refining the contract
 
 Pharos is where an AI-drafted contract earns trust. When a scenario fails,

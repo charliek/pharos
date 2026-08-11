@@ -63,3 +63,33 @@ routes:
     expectations:
       typical_status: 201
     tags: [write, migration-ready]
+
+  - id: login
+    match:
+      methods: ["POST"]
+      path_template: "/login"
+    comparison:
+      set_cookie:
+        # Each instance mints its own session id, so the cookie value is never
+        # the same across legacy/new by design — compare presence only. The
+        # `SameSite` attribute is a deliberate cosmetic difference between the
+        # two instances, so it is the one attribute this route ignores.
+        compare_values: presence
+        ignore_attributes: [SameSite]
+    expectations:
+      typical_status: 200
+    tags: [write, auth, migration-ready]
+
+  - id: find-user-redirect
+    match:
+      methods: ["GET"]
+      path_template: "/users/find"
+    comparison:
+      location:
+        # The redirect Location is relative, resolved against each target's own
+        # base URL (spec Section 8.6) — legacy and new run on different origins
+        # (different ports in the example), so only the path is meaningful.
+        origin: ignore
+    expectations:
+      typical_status: 303
+    tags: [read, migration-ready]

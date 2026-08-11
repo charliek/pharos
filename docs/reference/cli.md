@@ -11,6 +11,12 @@ Pharos exposes five subcommands, reached through the `ftest` script
 | `check-contract` | Validate a behavioral contract and its JSONPath compliance. |
 | `init` | Scaffold a conformance directory into a target repo. |
 
+One flag is global rather than per-subcommand:
+
+| Global flag | Description |
+|---|---|
+| `-v, --version` | Print the Pharos version and exit. |
+
 Configuration is layered (defaults < config file < environment < CLI flags); see
 the [configuration reference](configuration.md).
 

@@ -37,15 +37,15 @@ The two share a **behavioral contract** (Section 4) but are independently deploy
 - Long-term analytics, dashboards, or historical trend storage.
 - Stateful load testing or large-scale performance testing.
 - Protocols beyond HTTP/1.1 and HTTP/2 over TCP. No gRPC, no WebSockets, no GraphQL-specific handling in MVP.
-- Dual-writing or reconciling production *data*. Limen shadows reads; it does not replay or reconcile writes.
+- Dual-writing or reconciling production *data*. Limen shadows reads (and, only where a route explicitly opts a method in, replays a write to the new upstream for comparison); it never reconciles data between the two implementations.
 - Hot-reloading of behavioral comparison rules mid-run (flag *values* hot-reload; comparison *semantics* are fixed for the duration of a run — see Section 4.4).
-- A web UI.
+- A web UI. `limen report --format html` is not one: it renders a single self-contained static page from artifacts that already exist on disk — no server, no JavaScript, no external references, nothing live — so it is a report artifact in a second format, not a dashboard and not a UI.
 
 ### 1.3 Assumed migration pattern
 
 Limen is designed for the common, lowest-risk migration shape: **legacy and new share the same backing datastore**, and the migration is a **re-implementation of request-handling logic** (e.g. a framework or language change), not a data migration. A write through either implementation is immediately visible to the other, so correctness reduces to **behavioral parity over shared data** — exactly what the shared contract (Section 4) expresses.
 
-This assumption is why shadowing reads is safe (both read the same data) and why writes route to exactly one implementation rather than being shadowed (Section 6). Migrations that do **not** share a datastore (separate stores requiring synchronization) move into dual-write/reconciliation territory, which is explicitly out of scope; Limen's safety properties are not designed for that case.
+This assumption is why shadowing reads is safe (both read the same data) and why writes route to exactly one implementation unless a route explicitly opts them into shadowing (Section 6.1) — an opt-in that only makes sense once the operator has affirmed the endpoint tolerates being handled twice. Migrations that do **not** share a datastore (separate stores requiring synchronization) move into dual-write/reconciliation territory, which is explicitly out of scope; Limen's safety properties are not designed for that case.
 
 ---
 
@@ -110,7 +110,7 @@ This is a central design decision. Limen has **two deliberately separate code pa
 
 1. **Streaming path (default).** Used when a route has comparison disabled, or when a request is not selected for comparison sampling. Request and response bodies are **streamed** between client and upstream without full buffering. Limen observes only status, headers, and latency. Lowest overhead; unbounded body size is fine. This is the path most production traffic should take.
 
-2. **Buffer-for-compare path.** Used only when comparison is enabled for the route **and** this request is selected by sampling **and** the body is within `max_body_bytes`. Both relevant responses are buffered, normalized, hashed, and (if hashes differ and sampling selected this request for detailed diffing) diffed. Bounded by `max_body_bytes`; over the limit → comparison is skipped with reason `response_too_large`, and the primary response is still streamed to the client.
+2. **Buffer-for-compare path.** Used only when comparison is enabled for the route **and** this request is selected by sampling **and** the body is within `max_body_bytes`. Both relevant responses are buffered, normalized, hashed, and (if hashes differ and sampling selected this request for detailed diffing) diffed. Bounded by `max_body_bytes`; over the limit → comparison is skipped with reason `response_too_large`, and the primary response is still streamed to the client. It is bounded in **time** by the same `primary_ms` budget as the send that preceded it — one absolute per-request deadline covering send-to-headers *and* this buffering — so on expiry the response demotes to streaming with comparison skipped (`response_buffer_timeout`) rather than holding the client's first byte for a body that trickles. A `text/event-stream` response skips comparison eagerly (`event_stream`) before a byte is buffered, since an event stream never completes and buffering one could only ever end at that deadline. The *request* body is buffered under the same bound only for a write the route opted into shadowing (Section 6.1), so the shadow can replay identical bytes; over that limit → shadowing is skipped with reason `request_too_large` and the request body streams to the primary unchanged.
 
 The sampling decision is made **per request**, before buffering, so that on a route with `sample_rate: 0.1` you pay buffering cost on ~10% of traffic and stream the other ~90%.
 
@@ -118,7 +118,7 @@ The sampling decision is made **per request**, before buffering, so that on a ro
 
 For each incoming client request:
 
-1. **Match route** by method + path (longest path-prefix wins; see 5.2). No match → configured not-found response.
+1. **Match route** by method + path, narrowed by any query conditions the route declares (longest path-prefix wins, then a query-conditioned route over an unconditioned one; see 5.2). No match → configured not-found response.
 2. **Resolve route mode** and, for `percentage_split`, resolve the rollout percentage from the flag provider.
 3. **Decide primary upstream** (legacy or new) per mode + rollout + circuit-breaker state.
 4. **Decide shadow eligibility** (see 6.1).
@@ -145,8 +145,13 @@ limen/
       example-service.contract.yaml
   src/
     main.rs                 # bootstrap, signal handling, listener wiring
-    cli.rs                  # clap subcommands: run, validate-config, print-routes, check-contract
+    cli.rs                  # clap subcommands: run, validate-config, print-routes,
+                            #   check-contract, report, verdict, suggest-routes
     error.rs                # top-level error types
+    verdict.rs              # `limen verdict`: drain, floors, sink integrity, canary (§12.1)
+    suggest.rs              # observe-profile → per-route classification
+    draft.rs                # `limen suggest-routes`: draft config emission
+    report_html.rs          # `limen report --format html`: fail-closed status page (§10.4)
     config/
       mod.rs
       model.rs              # serde structs for limen.config.yaml
@@ -163,6 +168,8 @@ limen/
       client.rs             # upstream client (reqwest), TLS, timeouts, pooling
       proxy.rs              # streaming proxy core
       body.rs               # bounded buffering helpers, body-limit enforcement
+      forwarded.rs          # X-Forwarded-For/Proto + X-Limen-Shadow injection (§3.6)
+      shadow.rs             # shadow eligibility + fire-and-forget dispatch
     routing/
       mod.rs
       matcher.rs            # method + longest-prefix matching
@@ -183,11 +190,15 @@ limen/
       diff.rs               # JSON-aware structural diff, bounded + redacted
       redact.rs             # header + JSON-path + query redaction
       result.rs             # ComparisonResult, Mismatch types
+      headers.rs            # set_cookie/location comparison dimensions (§4.2)
     observability/
       mod.rs
-      metrics.rs            # metric definitions + registration
+      metrics.rs            # observer traits + metric event vocabulary
+      prometheus.rs         # metric definitions, labels, exposition rendering
       logging.rs            # tracing setup, structured fields
       request_id.rs         # request/trace id extraction + propagation
+      observe.rs            # observe mode: passive per-route traffic profiling
+      sink.rs               # durable mismatch diff sink + `limen report` (§10.4)
     resilience/
       mod.rs
       circuit_breaker.rs    # per-route, per-upstream breaker state machine
@@ -217,6 +228,18 @@ limen/
     docker-compose.yaml     # legacy + new mock + limen, for local trial
 ```
 
+### 3.6 Forwarded headers
+
+Limen sets three headers on every upstream request (`http/forwarded.rs`; injected in `http/proxy.rs::dispatch` before the primary send and before the shadow is planned, so both carry the same values):
+
+- **`X-Forwarded-For`**: the client's address is appended to any existing value, never replacing it — standard proxy semantics, matching a fronting load balancer or CDN. If the incoming request already carries the header as more than one field line, every line is preserved and combined (in order) with the client's address into one comma-joined output line — no hop in the chain is dropped. Set on **both** the primary and shadow requests. Limen learns the client's address from the accepted TCP connection (`axum`'s `ConnectInfo`); if that context is unavailable — e.g. the proxy embedded and driven directly against its router rather than through a bound listener — the header is **omitted entirely** rather than sent with a fabricated value. `X-Forwarded-Proto` is unaffected by this; it never depends on the client address. The value is the bare client IP (no port; an IPv6 address is rendered without brackets, unlike a URI authority).
+- **`X-Forwarded-Proto`**: set to `http` — the scheme of Limen's own data-plane listener, which is plain HTTP in the MVP (Section 11.4; TLS, if any, terminates in front of Limen, and `upstream_tls` config governs calls *to* upstreams, not this listener) — but **only when the client's request doesn't already carry the header**. A value already present came from a proxy upstream of Limen (e.g. a TLS-terminating load balancer) and is authoritative; Limen never overwrites it. Set on **both** the primary and shadow requests.
+- **`X-Limen-Shadow: 1`**: set **only** on the shadow request (never the primary), so an upstream — or its access logs — can distinguish Limen's fire-and-forget comparison traffic from real client traffic (Section 6.1). A client-supplied `X-Limen-Shadow` on an incoming request is **unconditionally stripped** before either the primary or the shadow request is built — a client must never be able to spoof shadow status on a request that actually hits the real upstream as primary traffic.
+
+None of the three is hop-by-hop, so the header-copy step that strips `Connection`-listed and framing headers (Section 3.4, step 5) leaves `X-Forwarded-For`/`X-Forwarded-Proto` untouched on the request leg. That same step, however, explicitly strips all three of `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Limen-Shadow` on the **response** leg — they are only ever written onto the *outbound-to-upstream* request headers, and an upstream that happens to reflect request headers back must not be able to leak them onto the client-facing response.
+
+`X-Forwarded-Host` is deliberately **not** set — upstreams are expected to pin their own base URL rather than trust a forwarded host.
+
 ---
 
 ## 4. The Shared Behavioral Contract
@@ -225,7 +248,7 @@ limen/
 
 The behavioral contract is the artifact that flows through the migration workflow and gets more trustworthy at each stage:
 
-```
+```text
    AI investigation                Pharos                       Limen
  (docs, OpenAPI, traffic,   (deterministic functional      (production shadow
   code, logs)                validation + refinement)        comparison + rollout)
@@ -519,6 +542,8 @@ routes:
     match:
       methods: ["GET"]
       path_prefix: "/devices/"
+      query_present: []                     # all of these must be in the query (default [] = no condition)
+      query_absent: []                      # none of these may be in the query (default [] = no condition)
     legacy_upstream: "https://legacy-device.internal"
     new_upstream: "https://new-device.internal"
     mode: "shadow_legacy_primary"           # see Section 6
@@ -537,6 +562,7 @@ routes:
       enabled: true                         # operational gate
       sample_rate: 0.1                       # fraction of eligible requests to compare
       max_body_bytes: 262144                 # skip comparison above this
+      shadow_methods: ["POST"]               # opt writes into shadowing; default [] = reads only
     circuit_breaker:
       enabled: true
       failure_rate_threshold: 0.25
@@ -551,6 +577,23 @@ routes:
       max_new_error_rate_ratio: 1.0           # new 5xx rate / legacy 5xx rate ceiling
       max_mismatch_rate: 0.001                # parity ceiling (fraction of compared requests)
 ```
+
+**Query-aware matching.** A route's `match` may narrow beyond method + path with two optional presence conditions over the request's query parameters:
+
+- `query_present: [name, …]` — the route matches only if **every** named parameter is present (AND semantics). Presence only: `?prompt=` counts exactly like `?prompt=login`.
+- `query_absent: [name, …]` — the route matches only if **none** of the named parameters is present.
+
+Both default to `[]`, and a route declaring neither behaves exactly as it did before the fields existed. Parameter names are compared after the same percent-decoding the comparison engine applies to query parameters, and values never participate — there are no value predicates and no regex. Decoding is one-directional: the *request's* names are decoded, the configured names are literals, so a route naming `login_verifier` matches a request spelling it `login%5Fverifier` but a config name written `login%5Fverifier` matches nothing — which is why validation refuses it (Section 5.3).
+
+The motivating case is a path whose hops are not equally safe to shadow. Shadow-comparing `/oauth2/auth` works for the initial authorize bounce, but the `login_verifier` / `consent_verifier` hops replay one-time tokens, so the shadow's copy deterministically fails at the shared authorization server ("The consent verifier has already been used", recorded in slauth's dual-lens campaign v1). Splitting the path into a conditioned route that relays the verifier hops and an unconditioned one that keeps comparing the bounces recovers the comparison without touching the tokens.
+
+**Precedence.** Among the routes whose method, path prefix, and query conditions all match:
+
+1. Longest `path_prefix` wins — unchanged, and it outranks every query condition, so a longer unconditioned prefix still beats a shorter conditioned one.
+2. At an **equal** prefix, a query-**conditioned** route (declaring either field) beats an unconditioned one. This is what lets a narrow exception sit alongside the general route for a path, in either config order.
+3. Config order remains the final stable tiebreak.
+
+Two conditioned routes that could both match one request are rejected at load time (Section 5.3), so this ordering never has to choose between them.
 
 Local flags file:
 
@@ -573,6 +616,9 @@ migration.get-device.shadow_enabled: true
 - A route does not declare **both** a `contract` reference and an inline behavioral `comparison.json` block.
 - All JSONPath expressions (in contract or inline) are within the supported subset (Section 7.4).
 - `fail_safe_mode` is a valid mode.
+- `match.query_present` / `match.query_absent` names are non-empty and unique within their field, and no name appears in **both** on one route (it could never match).
+- Those names are **literal decoded names**: no `%`, no `+`, no leading or trailing whitespace. The request's query is percent-decoded before comparison and config names are not, so an encoded spelling could never match — and a condition that matches nothing fails *open*, letting the traffic it was meant to except fall through to a sibling route. Rejected at startup rather than normalized (safety invariant: refuse invalid config).
+- Two query-conditioned routes sharing a `path_prefix` and at least one method must be **provably disjoint**: some parameter appears in one route's `query_present` and the other's `query_absent`, so no single request can satisfy both. The check is deliberately conservative — anything not provably disjoint (two `query_present` sets a request could carry together; a `query_present` / `query_absent` pair over unrelated names) fails validation, even where a cleverer analysis might prove it safe. Routes on different prefixes never need this: longest prefix still decides.
 - A route in `failover_to_legacy` mode whose `match.methods` include non-idempotent methods (POST, and PATCH unless declared idempotent) **must** set `failover_safe: true` explicitly, or validation fails. This forces an operator to consciously affirm that auto-failover is safe for that route (Section 6.5).
 - `budget` ratios, if present, are positive numbers; `max_mismatch_rate` is within 0–1.
 - `diff_sink.dir`, if the block is present, is non-empty. The directory (and its parent) need **not** exist — it is created on the first mismatch, so a fresh deploy is not failed for a directory nothing has written to yet.
@@ -591,16 +637,35 @@ Limen implements five modes. Each route declares exactly one.
 - For **eligible** read requests, a shadow request → **new** (fire-and-forget).
 - Compare legacy vs. new after normalization; emit metrics/logs/sampled diffs.
 - **Shadow or comparison failure never affects the client response.**
+- The shadow request carries `X-Limen-Shadow: 1` (Section 3.6), which the primary request never does.
 
 **Shadow eligibility (all must hold):**
 
-- Method is `GET` or `HEAD`.
+- Method is `GET` or `HEAD`, **or** a write method the route explicitly opted in via `comparison.shadow_methods` (below).
 - Comparison is enabled for the route.
-- Request body is absent or below the configured buffer limit.
+- Request body is absent (reads) or buffered within `max_body_bytes` (opted-in writes).
 - Shadow concurrency limit not exceeded (if configured).
 - Shutdown is not in progress.
 
-Writes are **never** shadowed by default.
+**Writes are never shadowed by default; a route may opt in per method.**
+
+Reads are replayed bodyless, so a body-bearing `GET`/`HEAD` is never shadowed — its body could not be reproduced faithfully. To shadow a write, a route lists the method in `comparison.shadow_methods` (only `POST` is supported today):
+
+```yaml
+comparison:
+  enabled: true
+  sample_rate: 0.1
+  max_body_bytes: 262144
+  shadow_methods: ["POST"]     # absent/empty (the default) = reads only
+```
+
+For such a request, the body is read **once, bounded by `max_body_bytes`**, and those exact bytes are sent to the primary and replayed to the shadow — identical payload and identical framing (a matching `Content-Length`; the client's own framing headers are hop-by-hop-stripped and re-derived). Only that bounded buffering is on the client path — the same cost the failover-safe path already pays; the shadow dispatch and comparison remain fire-and-forget. A body over the limit is **never fully buffered**: it streams to the primary untouched and shadowing is skipped entirely with reason `request_too_large`.
+
+The buffering is also skipped up front when the shadow concurrency limit (Section 9.3) is *already* saturated — the shadow would be refused anyway, and shedding the preparation is the point of the limit under load. That pre-check is best-effort (the permit is still reserved authoritatively after the primary responds); a lost race costs at most one buffered body whose shadow is then refused, which is the behavior without the check.
+
+Validation refuses `shadow_methods` that could not take effect: a method other than `POST`, a mode that does not shadow, `comparison.enabled: false`, or a method the route's `match.methods` does not even carry (Section 5.3).
+
+The opt-in is deliberately per route and per method: shadowing a write sends a second, real request to the new upstream, so it is only safe where the operator has affirmed that handling it twice is acceptable (typically because the new implementation shares the legacy datastore, Section 2.3, and the endpoint is idempotent or the shadow's effects are inert).
 
 ### 6.2 `legacy_only`
 
@@ -766,7 +831,7 @@ A global and/or per-route limit on concurrent in-flight shadow requests. When ex
 
 ### 9.4 Bounded buffers
 
-All buffering (request bodies, comparison buffering) is bounded by configured limits. The proxy must never buffer unbounded data; over-limit bodies fall back to streaming with comparison skipped.
+All buffering (request bodies, comparison buffering) is bounded by configured limits. The proxy must never buffer unbounded data; over-limit bodies fall back to streaming with comparison skipped. Comparison buffering of the primary response is additionally bounded in **time**: it draws down the same absolute `primary_ms` budget as the send that preceded it (Section 3.3), and an expiry demotes to the same streaming fallback with reason `response_buffer_timeout` — a bound on size alone would still let a trickling body hold the client's first byte indefinitely.
 
 ---
 
@@ -781,11 +846,11 @@ Required metrics (avoid high-cardinality labels — **no** user IDs, tenant IDs,
 - Upstream error count by route and upstream.
 - Timeout count by route and upstream.
 - Shadow request count.
-- Shadow skipped count by reason.
+- Shadow skipped count by reason (`concurrency_limit`, `request_too_large`, …). A `request_too_large` body was never replayed to the new upstream, so no comparison is attempted — it is a shadow skip, like `concurrency_limit`.
 - Comparison attempted count.
 - Comparison match count.
 - Comparison mismatch count.
-- Comparison skipped count by reason (`response_too_large`, `not_sampled`, `non_json`, `concurrency_limit`, …).
+- Comparison skipped count by reason (`response_too_large`, `event_stream`, `response_buffer_timeout`) — a shadow that was planned but whose comparison could not complete. A request the sampler never selected makes no shadow plan at all and is therefore counted in neither this series nor the shadow-skip one; comparison coverage follows from `sample_rate` and eligible request volume, not from a skip count.
 - Diff sampled count.
 - Circuit-breaker state by route and upstream.
 - Feature-flag provider health.
@@ -837,16 +902,35 @@ Behavior:
 ```
 
 - Every value written is **already redacted** by the comparison engine (Section 7.5) — the sink adds no new rendering. A dedicated test proves a cookie/`Location` mismatch record contains no raw cookie value and no sensitive query value.
-- The sink runs inside the fire-and-forget shadow task, so its file IO is off the client path by construction (invariant: comparison work never blocks the client). It never panics: an IO failure logs one `warn!`, counts subsequent failures, and drops the record.
+- The sink never does blocking file IO on the shadow task's Tokio worker. `SinkObserver::comparison` only serializes the record and hands it to a bounded (1024-deep) channel; a single dedicated OS thread owns the file handle, date rotation, and the actual write, so a stalled volume parks only that thread, never a Tokio worker (invariant 2). The channel is non-blocking to the producer: a full queue drops-and-counts (warn-once), exactly like an IO failure — a diagnostics sink must never degrade the proxy. On shutdown the observer is dropped, the channel closes, and the writer thread exits (best-effort flush; a diagnostic sink needn't guarantee its last line). It never panics: an IO failure logs one `warn!` (`limen.diff_sink_write_failed`), counts subsequent failures, and drops the record until a write succeeds again.
 - Rotation is by date only. **Retention is the operator's** (standard log-retention tooling over the directory); an in-proxy retention policy is future work.
 
 `limen report` aggregates a sink directory without needing the proxy's configuration:
 
 ```bash
-limen report --dir ./limen-diffs [--route <id>] [--since <RFC3339>] [--format human|json]
+limen report --dir ./limen-diffs [--route <id>] [--since <RFC3339>] [--format human|json] [--out <path>]
 ```
 
-It reads every `mismatches-*.jsonl` file in the directory, applies the filters, and prints per-route mismatch counts (total and by `mismatch_kinds`) plus the most recent examples per route. Unparseable lines are **counted and reported**, never fatal — a record torn by a killed process must not cost you the rest of the report. Unknown fields are ignored, so a directory written by a newer Limen still reports against an older binary.
+It reads every `mismatches-*.jsonl` file in the directory, applies the filters, and prints per-route mismatch counts (total and by `mismatch_kinds`) plus the most recent examples per route. Unparseable lines are **counted and reported**, never fatal — a record torn by a killed process must not cost you the rest of the report. Unknown fields are ignored, so a directory written by a newer Limen still reports against an older binary. Output goes to stdout unless `--out` names a file.
+
+#### `--format html`: the campaign status page
+
+The third format renders a self-contained HTML page over a whole campaign's artifacts rather than the sink alone:
+
+```bash
+limen report --dir ./limen-diffs --format html \
+  [--config limen.config.yaml] [--verdict verdict.json] \
+  [--profile profile.json] [--metrics metrics.txt] [--out report.html]
+```
+
+Each optional input is a file that already exists — the config the campaign ran under, a document captured from `limen verdict --format json`, a saved `GET /observe/profile` body, a saved `/metrics` scrape. The page runs nothing and contacts nothing; `--dir` alone still works, and everything not given is rendered as "not provided".
+
+Its defining property is negative: **it must be unable to render a failure or a missing input as success.** The banner has three states — CLEAN, INCOMPLETE, FAILURE — and reaching CLEAN requires the sink directory, `--config` and `--verdict` all present and parsed, every *provided* optional input parsed, a self-consistent verdict that exited 0 online, and no disagreement between artifacts. Sink counts are reconciled against the verdict's per-route map, canary records against its `canary_records`, and verdict floors against the config's `effective_min_comparisons()`; any disagreement is a named finding and a FAILURE. Where the page reads an input `limen verdict` also reads, it takes the same position on it — including which metric families may legitimately be absent (§12.1's required series are required here too; the lazily-registered ones are not).
+
+Two rules follow from that property:
+
+- **`--route` and `--since` are refused with `--format html`** (exit 1). Both filter records *before* aggregation, so a filtered page could reconcile a dirty sink to zero and render green.
+- **Producing the page is exit 0 even when every section of it is a failure.** A CI artifact that vanishes on a bad run is one nobody looks at. Only a page that could not be produced — an unwritable `--out`, an incoherent flag combination — is exit 1; an unreadable *input* is a section of the page, not a process failure.
 
 ---
 
@@ -870,6 +954,7 @@ A `examples/docker-compose.yaml` brings up mock legacy + new + Limen for a day-o
 
 - **MVP: TLS to upstreams** (HTTPS legacy/new), with certificate verification on by default and an optional custom CA bundle for internal PKI.
 - **Post-MVP: client-side TLS termination** at Limen (serving HTTPS to clients) — explicitly a future expansion, designed for but not implemented in MVP.
+- Because Limen's own listener is plain HTTP in the MVP, `X-Forwarded-Proto` set by Limen is always `http` (Section 3.6). There is no listener-TLS config to source another value from; if client-side TLS termination lands post-MVP, that config's resolved scheme becomes this value's source instead of the hardcoded constant.
 
 ---
 
@@ -989,7 +1074,7 @@ The MVP is **done** when all of the following hold:
 
 ### 15.4 Shadowing
 - Client always receives the legacy (primary) response in shadow mode.
-- Eligible reads are shadowed to new; writes are not shadowed by default.
+- Eligible reads are shadowed to new; writes are not shadowed unless the route opted the method into `comparison.shadow_methods`, in which case the buffered request body reaches both upstreams byte-identically.
 - Shadow or comparison failure never affects the client request or latency.
 - Per-request sampling gates buffering and detailed diffing.
 
@@ -1024,9 +1109,9 @@ The MVP is **done** when all of the following hold:
 
 ### 16.1 Unit tests
 
-**Route matching:** exact match; prefix match; longest prefix wins; method-specific over method-agnostic; header predicate (if implemented); no match; duplicate route IDs fail validation.
+**Route matching:** exact match; prefix match; longest prefix wins; method-specific over method-agnostic; header predicate (if implemented); no match; duplicate route IDs fail validation; query conditions (`query_present` AND semantics, `query_absent`, presence regardless of value, percent-decoded names); a conditioned route beats an unconditioned one at an equal prefix but not a longer prefix; a table with no conditions routes identically whatever the query.
 
-**Config validation:** valid minimal config; invalid upstream URL; percentage out of range; missing required route fields; invalid timeouts; out-of-subset JSONPath; duplicate route IDs; unknown route mode; both contract-ref and inline behavioral block on one route fails; `failover_to_legacy` route with non-idempotent methods missing `failover_safe: true` fails; out-of-range `budget` values fail.
+**Config validation:** valid minimal config; invalid upstream URL; percentage out of range; missing required route fields; invalid timeouts; out-of-subset JSONPath; duplicate route IDs; unknown route mode; both contract-ref and inline behavioral block on one route fails; `failover_to_legacy` route with non-idempotent methods missing `failover_safe: true` fails; out-of-range `budget` values fail; empty/duplicate query-condition names fail; percent-encoded, `+`-bearing, or whitespace-padded query-condition names fail; a name in both `query_present` and `query_absent` fails; two query-conditioned routes on one prefix fail unless provably disjoint.
 
 **Contract:** valid contract loads; reference resolves; merge of defaults + per-route comparison; conflict (contract + inline) rejected; `check-contract` flags out-of-subset paths.
 
@@ -1067,7 +1152,7 @@ The MVP is **done** when all of the following hold:
 
 - Baseline streaming overhead vs. SLO defaults.
 - Shadow overhead — client-visible latency statistically unchanged with shadow on.
-- Large-body behavior — bodies above `max_body_bytes` skip comparison (`response_too_large`), no unbounded buffering, client still served.
+- Large-body behavior — bodies above `max_body_bytes` skip comparison (`response_too_large`) or shadowing (`request_too_large`, on a write-shadowing route), no unbounded buffering, client still served.
 - High concurrency — stable, bounded memory, shadows throttled/skipped, no panics or task leaks.
 
 ---
@@ -1079,7 +1164,7 @@ Prioritize a clean MVP with strong tests over breadth or cleverness.
 **Safe default choices:**
 - Default to legacy when uncertain.
 - Never block client responses on shadow/comparison.
-- Never shadow writes by default.
+- Never shadow writes by default; a write is shadowed only where a route opted its method into `comparison.shadow_methods`, and only with a bounded, replayed body.
 - Never replay a failed in-flight request against legacy unless the route is explicitly `failover_safe: true` (idempotent). Routing *subsequent* requests to legacy via the circuit breaker is fine; *retrying the same request* that may already have hit new is not, unless idempotent.
 - Never log sensitive values by default.
 - Bound all buffers.

@@ -36,6 +36,11 @@ test:  ## Run the Vitest harness suite
 run:  ## Run the CLI; pass flags via ARGS, e.g. make run ARGS="validate"
 	$(BUN) run ftest -- $(ARGS)
 
+.PHONY: audit
+audit:  ## Audit installed package licenses against the allowlist
+	@command -v $(BUN) >/dev/null 2>&1 || { echo "AUDIT SKIPPED (bun not installed)"; exit 1; }
+	$(BUN) run scripts/audit-licenses.ts
+
 # ---- docs --------------------------------------------------------------
 
 .PHONY: docs docs-serve

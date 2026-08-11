@@ -1,0 +1,64 @@
+version: 1
+id: users.session-login-profile
+name: Session login then profile read
+description: >
+  A cookie-jar flow (spec Sections 4.6 and 9.5): logging in sets a session
+  cookie that `cookies: true` carries into later requests automatically. The
+  first login's Set-Cookie is compared two-sided through the contract's
+  set_cookie dimension (presence-level value — each mock instance mints its
+  own session id — with the cosmetic SameSite attribute ignored); a second
+  login demonstrates the one-sided `expect.set_cookie` vocabulary. The profile
+  step asserts an explicit 200 status rather than a two-sided "same" status,
+  because both services returning an identical 401 (a broken jar) would
+  otherwise pass a two-sided comparison.
+service: user-service
+tags: [read, write, smoke, migration-ready]
+mode: compare_live
+cookies: true
+contract: "../../contracts/user-service.contract.yaml#login"
+variables:
+  username: ada
+  password: s3cr3t-not-real
+steps:
+  - id: login
+    name: Log in and compare the session cookie two-sided
+    request:
+      method: POST
+      path: /login
+      headers:
+        content-type: application/json
+      body:
+        username: "{{ variables.username }}"
+        password: "{{ variables.password }}"
+    compare:
+      strategy: json_semantic
+      status: same
+  - id: login-cookie-presence
+    name: Log in again and assert the cookie one-sided
+    request:
+      method: POST
+      path: /login
+      headers:
+        content-type: application/json
+      body:
+        username: "{{ variables.username }}"
+        password: "{{ variables.password }}"
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+        set_cookie:
+          - name: session
+            value_present: true
+  - id: profile
+    name: Fetch the profile with the jar's current session cookie
+    request:
+      method: GET
+      path: /profile
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+        body:
+          json_paths:
+            $.authenticated: true

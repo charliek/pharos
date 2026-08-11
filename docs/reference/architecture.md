@@ -45,7 +45,7 @@ The modules mirror spec §3.5:
 
 | Module | Responsibility |
 |---|---|
-| `cli` | Argument parsing and command dispatch (`run`, `validate`, `record`, `check-contract`). |
+| `cli` | Argument parsing and command dispatch (`run`, `validate`, `record`, `check-contract`, `init`). |
 | `config` | Layered config loading and mode-aware validation. |
 | `contract` | Contract schema, loading, reference resolution, and rule merge. |
 | `scenarios` | Scenario schema, loading, and discovery. |
