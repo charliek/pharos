@@ -30,5 +30,10 @@ __pycache__/
 *.swp
 *~
 
-# Claude Code local state
-.claude/
+# Claude Code local state -- everything under .claude/ is ignored except the
+# checked-in skills. The chain must be un-excluded directory by directory: git
+# never descends into an excluded directory, so a `!` rule on a file inside one
+# would never be reached.
+/.claude/*
+!/.claude/skills/
+
