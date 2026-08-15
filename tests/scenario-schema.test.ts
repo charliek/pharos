@@ -418,6 +418,44 @@ steps:
     expect(paths(yaml)).toContain('steps[0].compare.expect');
   });
 
+  // An `expect` block is read only by 'explicit_expectations' (compare.ts) — beside
+  // any other strategy it is silently ignored, so the run compares something else
+  // and a pass looks like the author's expectations held. Full matrix over the five
+  // strategies: one accepted, four rejected.
+  const withExpect = (strategy: string, extra = '') => `
+version: 1
+id: users.expect-pairing
+name: Expect pairing
+service: user-service
+tags: [smoke]
+mode: compare_live
+steps:
+  - id: get
+    request: { method: GET, path: /users/1 }
+    compare:
+      strategy: ${strategy}
+${extra}      expect:
+        status: 200
+`;
+
+  it("accepts an expect block beside strategy 'explicit_expectations'", () => {
+    expect(paths(withExpect('explicit_expectations'))).toEqual([]);
+  });
+
+  it.each([
+    ['exact', ''],
+    ['json_semantic', ''],
+    // Each of these carries its own strategy-required field, so the only issue
+    // reported is the expect mispairing itself.
+    ['subset', '      body:\n        require_matching_paths: ["$.id"]\n'],
+    ['custom', '      comparator: my-comparator\n'],
+  ])('rejects an expect block beside strategy %s', (strategy, extra) => {
+    const issues = issuesOf(withExpect(strategy, extra));
+    expect(issues.map((issue) => issue.path)).toEqual(['steps[0].compare.expect']);
+    expect(issues[0].message).toContain("only read by strategy 'explicit_expectations'");
+    expect(issues[0].message).toContain(`strategy '${strategy}'`);
+  });
+
   it('reports the file and line on a YAML parse error', () => {
     try {
       loadScenarioFromText('id: [unterminated', 'broken.yaml');

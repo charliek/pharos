@@ -111,7 +111,11 @@ compare:
 `explicit_expectations` must assert at least one of `expect.status`,
 `expect.body.json_paths`, `expect.headers`, `expect.header_absent`,
 `expect.header_present`, `expect.set_cookie`, `expect.set_cookie_absent`,
-`expect.location`. Naming `set-cookie` or `cookie` in `expect.headers` /
+`expect.location`. The block above is a field catalog, not a loadable step: each
+key is annotated with the strategy that reads it, and `expect` is read *only* by
+`explicit_expectations`. An `expect` block beside any other strategy — including
+`custom`, whose comparator owns its own assertions — is a validation error rather
+than a silently ignored block. Naming `set-cookie` or `cookie` in `expect.headers` /
 `expect.header_absent` / `expect.header_present` is a validation error — those
 read the lossy single-value header map; assert cookies with `expect.set_cookie`
 / `expect.set_cookie_absent`, which read the lossless capture. Each `set_cookie`

@@ -319,6 +319,19 @@ const compareSchema = z
         }
       }
     }
+    // The converse of the rule above: `compare()` reads `expect` only in the
+    // explicit_expectations branch, so an expect block beside any other strategy
+    // is silently ignored — the run compares something else entirely and a pass
+    // looks like the author's expectations held. Reject at load (fail closed).
+    // `custom` is no exception: a comparator hook owns its own assertions and
+    // never sees `expect`, so pairing the two is the same mispairing.
+    if (compare.expect !== undefined && compare.strategy !== 'explicit_expectations') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expect'],
+        message: `compare.expect is only read by strategy 'explicit_expectations' — strategy '${compare.strategy}' ignores it; switch compare.strategy to 'explicit_expectations' or remove compare.expect`,
+      });
+    }
     if (compare.strategy === 'custom' && !compare.comparator) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
