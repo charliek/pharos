@@ -55,9 +55,30 @@ export const contractSchema = z
   .strict()
   .superRefine((contract, ctx) => {
     const seen = new Set<string>();
-    // A `set-cookie`/`location` conflict listed in service defaults is reported
-    // once, however many routes declare the block that conflicts with it.
+
+    // `location` conflicts only with a `location` block, and the layers resolve
+    // together — a defaults-level list entry conflicts with a route-level block
+    // and vice versa (spec Section 8.6). `set-cookie` needs no such lookup: it is
+    // rejected wherever it is listed.
+    const locationBlockAnywhere =
+      Boolean(contract.defaults?.location) ||
+      contract.routes.some((route) => Boolean(route.comparison?.location));
+
+    // A defaults-level entry is reported once at `defaults`, however many routes
+    // it resolves into.
     const reportedInDefaults = new Set<string>();
+    for (const name of dimensionHeaderConflicts(contract.defaults?.compare_headers, {
+      location: locationBlockAnywhere,
+    })) {
+      const key = name.trim().toLowerCase();
+      if (reportedInDefaults.has(key)) continue;
+      reportedInDefaults.add(key);
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['defaults', 'compare_headers'],
+        message: dimensionHeaderConflictMessage(name),
+      });
+    }
 
     contract.routes.forEach((route, index) => {
       if (seen.has(route.id)) {
@@ -69,27 +90,12 @@ export const contractSchema = z
       }
       seen.add(route.id);
 
-      // The dimensions resolve across both layers, so the conflict is judged on
-      // the *resolved* rules: a defaults-level block conflicts with a route-level
-      // compare_headers entry and vice versa (spec Section 8.6).
-      const present = {
-        set_cookie: Boolean(contract.defaults?.set_cookie ?? route.comparison?.set_cookie),
+      for (const name of dimensionHeaderConflicts(route.comparison?.compare_headers, {
         location: Boolean(contract.defaults?.location ?? route.comparison?.location),
-      };
-      for (const name of dimensionHeaderConflicts(route.comparison?.compare_headers, present)) {
+      })) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['routes', index, 'comparison', 'compare_headers'],
-          message: dimensionHeaderConflictMessage(name),
-        });
-      }
-      for (const name of dimensionHeaderConflicts(contract.defaults?.compare_headers, present)) {
-        const key = name.trim().toLowerCase();
-        if (reportedInDefaults.has(key)) continue;
-        reportedInDefaults.add(key);
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['defaults', 'compare_headers'],
           message: dimensionHeaderConflictMessage(name),
         });
       }

@@ -11,6 +11,7 @@ import type {
 } from '../comparison/expectations';
 import type { ComparisonResult } from '../comparison/result';
 import type { ComparisonRules } from '../comparison/rules';
+import { maskText } from '../comparison/sensitive';
 import type { PharosConfig } from '../config/config';
 import { inlineComparisonRules } from '../contract/merge';
 import { ValidationError } from '../errors';
@@ -18,6 +19,7 @@ import { writeFailureArtifacts } from '../reporting/artifacts';
 import type { Scenario, ScenarioStep } from '../scenarios/schema';
 import type { CookieJar } from './cookies';
 import {
+  assertRecordingIdentity,
   buildRecording,
   loadRecording,
   type Recording,
@@ -33,6 +35,7 @@ import {
 } from './http-client';
 import {
   extractValue,
+  isSensitiveExtract,
   substituteText,
   substituteValue,
   type VariableContext,
@@ -321,7 +324,12 @@ function applyExtraction(
   if (!step.extract) return undefined;
   try {
     for (const [name, rule] of Object.entries(step.extract)) {
-      ctx.variables[name] = extractValue(rule, { legacy, candidate });
+      const value = extractValue(rule, { legacy, candidate });
+      ctx.variables[name] = value;
+      // The variable store keeps the raw value — substitution must still put the
+      // real credential on the wire. Registering it here is what keeps it out of
+      // every *output* surface, wherever a later step substitutes it.
+      if (isSensitiveExtract(rule)) ctx.sensitive?.register(name, value);
     }
   } catch (error) {
     if (error instanceof VariableError) {
@@ -366,13 +374,39 @@ async function runRecordStep(
     response: legacy,
     safeHeaders: step.recording.safe_headers ?? [],
     redaction: config.redaction,
+    sensitive: ctx.sensitive,
   });
   const recordingPath = writeRecording(config.fixture_dir, step.recording.fixture, recording);
   return { stepId: step.id, name: step.name, pass: true, legacy, recordingPath };
 }
 
-/** Execute one scenario step end to end (spec Section 3.3). */
+/**
+ * Execute one scenario step end to end (spec Section 3.3), then mask the one
+ * output field the step assembles as free text.
+ *
+ * `error` is the single string on a {@link StepResult} that is neither compared
+ * nor redacted anywhere downstream — it reaches the console, the JSON report and
+ * the JUnit XML verbatim — and it routinely embeds the request URL, which can
+ * carry an extracted secret in its query. Masking it here, at the one boundary
+ * every execution failure funnels through, covers every `executionFailure` call
+ * site (including the recording path) without threading the registry into each.
+ * The comparison result is already masked by `compare()`; artifacts and
+ * recordings mask as they write.
+ */
 export async function runStep(
+  scenario: Scenario,
+  step: ScenarioStep,
+  ctx: VariableContext,
+  config: PharosConfig,
+  scenarioRules: ComparisonRules | undefined,
+  deps: StepRunnerDeps,
+): Promise<StepResult> {
+  const result = await executeStep(scenario, step, ctx, config, scenarioRules, deps);
+  if (result.error !== undefined) result.error = maskText(result.error, ctx.sensitive);
+  return result;
+}
+
+async function executeStep(
   scenario: Scenario,
   step: ScenarioStep,
   ctx: VariableContext,
@@ -410,6 +444,7 @@ export async function runStep(
     let recording: Recording;
     try {
       recording = loadRecording(config.fixture_dir, step.recording.fixture);
+      assertRecordingIdentity(recording, step.recording.fixture, scenario.id, step.id);
       legacy = recordingResponse(recording);
     } catch (error) {
       const detail = error instanceof ValidationError ? error.issues[0]?.message : messageOf(error);
@@ -513,6 +548,7 @@ export async function runStep(
     comparatorArgs: step.compare.args,
     sensitiveHeaders: config.redaction.headers,
     sensitiveQueryParams: config.redaction.query_params,
+    sensitive: ctx.sensitive,
     legacyRequestUrl,
     candidateRequestUrl: sentNew.url,
   };
@@ -526,6 +562,7 @@ export async function runStep(
       step.id,
       { request: sentNew.spec, legacy, candidate, diffText: comparison.diffText },
       config.redaction,
+      ctx.sensitive,
     );
   }
   return {

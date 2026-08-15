@@ -177,24 +177,33 @@ export function defaultLocationRules(): LocationRules {
 }
 
 /**
- * The `compare_headers` conflict rule (spec Section 8.6): `set-cookie` and
- * `location` are dimensions of their own, so listing either in `compare_headers`
- * while the corresponding block is present is a load-time validation error — the
- * block wins conceptually, and the error keeps the author's intent unambiguous.
+ * Every misuse of `compare_headers` as a stand-in for an optional comparison
+ * dimension (spec Section 8.6). `set_cookie` and `location` are dimensions of
+ * their own rather than `compare_headers` entries, so a hit is a load-time
+ * validation error rather than a warning. The two are deliberately
+ * **asymmetric**:
+ *
+ * - `set-cookie` is an error *unconditionally*, block or no block. The generic
+ *   header path compares one value per name (`headersToObject` keeps only the
+ *   last `Set-Cookie`), so a response carrying several cookies silently loses
+ *   all but one — comparing cookies that way is always a config bug, and the
+ *   dedicated `set_cookie` block is the only correct tool. Listing the header
+ *   therefore never has a legitimate reading, so block presence is not consulted.
+ * - `location` is a genuinely single-value header, so the generic path compares
+ *   it faithfully; only listing it *alongside* a `location` block is ambiguous
+ *   intent — hence the `present.location` argument. Listing it on its own is legal.
+ *
  * Names match case-insensitively after trimming whitespace, exactly as Limen's
  * check does. Returns the offending names as authored.
  */
 export function dimensionHeaderConflicts(
   compareHeaders: readonly string[] | undefined,
-  present: { set_cookie?: boolean; location?: boolean },
+  present: { location?: boolean },
 ): string[] {
   const out: string[] = [];
   for (const authored of compareHeaders ?? []) {
     const name = asciiLower(authored.trim());
-    if (
-      (name === 'set-cookie' && present.set_cookie) ||
-      (name === 'location' && present.location)
-    ) {
+    if (name === 'set-cookie' || (name === 'location' && present.location)) {
       out.push(authored);
     }
   }
@@ -203,8 +212,12 @@ export function dimensionHeaderConflicts(
 
 /** The message a {@link dimensionHeaderConflicts} hit produces. */
 export function dimensionHeaderConflictMessage(name: string): string {
-  const block = asciiLower(name.trim()) === 'set-cookie' ? 'set_cookie' : 'location';
-  return `compare_headers lists '${name}' while a '${block}' comparison block is present — '${block}' is a comparison dimension of its own (spec Section 8.6), so drop the compare_headers entry`;
+  if (asciiLower(name.trim()) === 'set-cookie') {
+    // Unconditional, so there may be no block to point at — and the generic
+    // header path is lossy whether or not one is declared.
+    return `compare_headers lists '${name}' — 'set_cookie' is a comparison dimension of its own (spec Section 8.6), and the generic header path compares a single value, silently dropping the rest of a multi-cookie response; drop the compare_headers entry and use a 'set_cookie' block instead`;
+  }
+  return `compare_headers lists '${name}' while a 'location' comparison block is present — 'location' is a comparison dimension of its own (spec Section 8.6), so drop the compare_headers entry`;
 }
 
 export function emptyJsonNormalization(): JsonNormalization {

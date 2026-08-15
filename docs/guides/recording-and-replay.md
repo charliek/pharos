@@ -23,7 +23,7 @@ so a normal `run` never writes a fixture, and **CI refuses recording updates by
 default**:
 
 ```bash
-bun run ftest -- record --scenario users.record-existing-user
+bun run ftest -- record --scenario users.replay-get-user-recording
 ```
 
 Recordings are redacted before they are written: only `safe_headers` are kept,
@@ -55,7 +55,11 @@ Both the recorded response and the live new response are normalized by the same
 contract, then compared. The scenario's request is sent (freshly
 variable-substituted, so it carries current auth) — the recorded request is
 redacted and so is not replayed; the recording is the response oracle. A missing
-or invalid fixture fails clearly.
+or invalid fixture fails clearly — and so does a fixture whose stamped
+`scenarioId`/`stepId` don't match the scenario/step now replaying it, naming the
+fixture path and both the expected and recorded ids. There's no escape hatch:
+a fixture recorded under one scenario or step can't be pointed at another,
+re-record it under the correct one instead.
 
 ## Recording format
 
@@ -64,7 +68,7 @@ Fixtures are JSON (scenarios are YAML):
 ```json
 {
   "version": 1,
-  "scenarioId": "users.record-existing-user",
+  "scenarioId": "users.replay-get-user-recording",
   "stepId": "get-user",
   "recordedAt": "2024-01-01T00:00:00.000Z",
   "request": { "method": "GET", "path": "/users/user-123" },

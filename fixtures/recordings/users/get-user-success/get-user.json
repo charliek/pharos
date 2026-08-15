@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "scenarioId": "users.record-existing-user",
+  "scenarioId": "users.replay-get-user-recording",
   "stepId": "get-user",
   "recordedAt": "2024-01-01T00:00:00.000Z",
   "environment": "local",

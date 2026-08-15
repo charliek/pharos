@@ -47,6 +47,7 @@ steps:
       timeoutMs: 5000                # optional per-request override
     extract:
       userId: { from: new.body, path: $.id }
+      token: { from: new.body, path: $.access_token, sensitive: true }
     recording:                       # legacy_record / replay
       fixture: users/get-user.json
       safe_headers: [content-type]   # only these headers are recorded
@@ -56,9 +57,11 @@ steps:
 ```
 
 OPTIONS and HEAD must not set `body` or `form` (a validation error): bodies on
-those methods are unreliable across HTTP implementations. `form` is also
-refused on `GET` (same validation error) since a GET form has no meaning;
-`body` on `GET` is unaffected and left as-is. With
+those methods are unreliable across HTTP implementations. `GET` rejects **both**
+fields for the same reason in a different form — a GET carries its data in the
+query string, so neither a `form` nor a `body` on it has a meaning, and letting
+one through would surface as a confusing network-layer error instead of a clear
+validation one. With
 `follow_redirects: true` (the default) intermediate 30x hops are invisible — walk
 a redirect chain one step per hop with `follow_redirects: false`, replaying the
 extracted `Location` as the next step's `path`.
@@ -70,6 +73,31 @@ subset; header extraction uses a header name; `*.set_cookie` extraction uses a
 cookie **name** and yields that cookie's value from the lossless multi-value
 capture (last occurrence wins; attributes are never extracted). `response.*` is
 only valid in single-target modes.
+
+### Sensitive extractions
+
+An extracted value stays masked in every output surface — failure artifacts,
+recordings, diff text, error messages, and the view a custom comparator sees —
+wherever a later step substitutes it. What the wire carries is unaffected; only
+output is masked, and the mask names the variable: `[REDACTED:token]`.
+
+- `*.headers` and `*.set_cookie` extractions are sensitive **automatically**: a
+  cookie or header value is secret-bearing by construction. There is no opt-out
+  — `sensitive: false` beside one of those sources is a validation error.
+- A body extraction is ordinary data unless you say otherwise. Add
+  `sensitive: true` for the `$.access_token` case.
+
+A whole value is masked at any length; a value embedded in a longer string
+(`Bearer <token>`) is masked from eight characters up, so a very short value
+cannot corrupt unrelated output — the flip side is that a secret shorter than
+eight characters **does** survive inside a larger string, and Pharos warns at
+extraction time (naming the variable, never the value) when that applies. An
+extracted object or array is registered leaf by leaf, so a credential bundle
+masks every token inside it. Percent- and form-encoded forms are masked too,
+so a secret that reached a URL query or a urlencoded body cannot survive its
+encoding. A recording is masked as well — deliberately, and fail-closed: a
+replay that only works because a fixture stored a live credential will fail at
+the comparison instead. Re-record with a fresh one.
 
 ## Comparison strategies
 
@@ -111,7 +139,11 @@ compare:
 `explicit_expectations` must assert at least one of `expect.status`,
 `expect.body.json_paths`, `expect.headers`, `expect.header_absent`,
 `expect.header_present`, `expect.set_cookie`, `expect.set_cookie_absent`,
-`expect.location`. Naming `set-cookie` or `cookie` in `expect.headers` /
+`expect.location`. The block above is a field catalog, not a loadable step: each
+key is annotated with the strategy that reads it, and `expect` is read *only* by
+`explicit_expectations`. An `expect` block beside any other strategy — including
+`custom`, whose comparator owns its own assertions — is a validation error rather
+than a silently ignored block. Naming `set-cookie` or `cookie` in `expect.headers` /
 `expect.header_absent` / `expect.header_present` is a validation error — those
 read the lossy single-value header map; assert cookies with `expect.set_cookie`
 / `expect.set_cookie_absent`, which read the lossless capture. Each `set_cookie`

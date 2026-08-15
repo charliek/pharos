@@ -270,12 +270,101 @@ steps:
     expect(paths(yaml)).toContain('steps[0].request.form');
   });
 
+  it('rejects a body on a GET request (a GET body has no meaning)', () => {
+    const yaml = withRequest('method: GET', 'path: /users', 'body: { a: 1 }');
+    expect(paths(yaml)).toContain('steps[0].request.body');
+  });
+
   it('accepts follow_redirects and a form body', () => {
     const yaml = withRequest(
       'method: POST',
       'path: /oauth2/token',
       'follow_redirects: false',
       'form: { grant_type: authorization_code, expires_in: 300, offline: true }',
+    );
+    expect(paths(yaml)).toEqual([]);
+  });
+
+  it('rejects a form body combined with a contradictory explicit content-type', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: application/json }',
+    );
+    expect(paths(yaml)).toContain('steps[0].request.headers.content-type');
+  });
+
+  it('rejects a form body combined with a contradictory content-type under a mixed-case header name', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { Content-Type: application/json }',
+    );
+    expect(paths(yaml)).toContain('steps[0].request.headers.Content-Type');
+  });
+
+  it('rejects a form body combined with a parameterized contradictory content-type', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "application/json; charset=utf-8" }',
+    );
+    expect(paths(yaml)).toContain('steps[0].request.headers.content-type');
+  });
+
+  it('accepts a form body with a compatible, parameterized content-type (charset allowed)', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "application/x-www-form-urlencoded; charset=utf-8" }',
+    );
+    expect(paths(yaml)).toEqual([]);
+  });
+
+  it('tolerates whitespace around the media type in a compatible form content-type', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "  application/x-www-form-urlencoded  ; charset=utf-8" }',
+    );
+    expect(paths(yaml)).toEqual([]);
+  });
+
+  it('judges a duplicate-cased content-type by the LAST entry — the one that ships on the wire', () => {
+    // Mirrors buildHeaders' merge order (`.set()` in Object.entries order, per-
+    // request wins by position): the second entry here is what actually ships.
+    const acceptedYaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { Content-Type: application/json, content-type: application/x-www-form-urlencoded }',
+    );
+    expect(paths(acceptedYaml)).toEqual([]);
+
+    const rejectedYaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: application/x-www-form-urlencoded, Content-Type: application/json }',
+    );
+    expect(paths(rejectedYaml)).toContain('steps[0].request.headers.Content-Type');
+  });
+
+  it('accepts a form body with a templated content-type header (deferred to the client)', () => {
+    // The schema runs before the runner's `{{ ... }}` variable substitution
+    // (spec Section 7.1), so it cannot know what this resolves to — flagging it
+    // here would reject scenarios whose resolved value is actually compatible.
+    // The client re-checks the resolved value after substitution (spec Section 9.6).
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "{{ variables.contentType }}" }',
     );
     expect(paths(yaml)).toEqual([]);
   });
@@ -311,6 +400,45 @@ steps:
     );
   });
 
+  // `sensitive` (spec Section 8.5) marks a body extraction's value a secret so
+  // it is masked wherever it is later substituted.
+  const sensitiveExtract = (from: string, path: string, sensitive: string) => `
+version: 1
+id: auth.token
+name: Token
+service: user-service
+tags: [read]
+mode: new_only_assert
+steps:
+  - id: login
+    request: { method: POST, path: /login }
+    extract:
+      accessToken:
+        from: ${from}
+        path: ${path}
+        sensitive: ${sensitive}
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+`;
+
+  it('accepts sensitive: true on a body extraction', () => {
+    expect(paths(sensitiveExtract('response.body', '$.access_token', 'true'))).toEqual([]);
+  });
+
+  it('accepts sensitive: false on a body extraction (the default)', () => {
+    expect(paths(sensitiveExtract('response.body', '$.access_token', 'false'))).toEqual([]);
+  });
+
+  it('rejects sensitive: false on a header or set_cookie extraction (no opt-out)', () => {
+    for (const from of ['response.headers', 'response.set_cookie']) {
+      const issues = issuesOf(sensitiveExtract(from, 'authorization', 'false'));
+      expect(issues.map((issue) => issue.path)).toContain('steps[0].extract.accessToken.sensitive');
+      expect(issues[0].message).toMatch(/always sensitive/);
+    }
+  });
+
   it('rejects an explicit_expectations block that asserts nothing', () => {
     const yaml = `
 version: 1
@@ -327,6 +455,44 @@ steps:
       expect: {}
 `;
     expect(paths(yaml)).toContain('steps[0].compare.expect');
+  });
+
+  // An `expect` block is read only by 'explicit_expectations' (compare.ts) — beside
+  // any other strategy it is silently ignored, so the run compares something else
+  // and a pass looks like the author's expectations held. Full matrix over the five
+  // strategies: one accepted, four rejected.
+  const withExpect = (strategy: string, extra = '') => `
+version: 1
+id: users.expect-pairing
+name: Expect pairing
+service: user-service
+tags: [smoke]
+mode: compare_live
+steps:
+  - id: get
+    request: { method: GET, path: /users/1 }
+    compare:
+      strategy: ${strategy}
+${extra}      expect:
+        status: 200
+`;
+
+  it("accepts an expect block beside strategy 'explicit_expectations'", () => {
+    expect(paths(withExpect('explicit_expectations'))).toEqual([]);
+  });
+
+  it.each([
+    ['exact', ''],
+    ['json_semantic', ''],
+    // Each of these carries its own strategy-required field, so the only issue
+    // reported is the expect mispairing itself.
+    ['subset', '      body:\n        require_matching_paths: ["$.id"]\n'],
+    ['custom', '      comparator: my-comparator\n'],
+  ])('rejects an expect block beside strategy %s', (strategy, extra) => {
+    const issues = issuesOf(withExpect(strategy, extra));
+    expect(issues.map((issue) => issue.path)).toEqual(['steps[0].compare.expect']);
+    expect(issues[0].message).toContain("only read by strategy 'explicit_expectations'");
+    expect(issues[0].message).toContain(`strategy '${strategy}'`);
   });
 
   it('reports the file and line on a YAML parse error', () => {
@@ -367,6 +533,18 @@ describe('inline set_cookie / location blocks (spec §8.6)', () => {
     expect(paths(withCompare('headers: { compare: [location] }', 'location: {}'))).toEqual([
       'steps[0].compare.headers.compare',
     ]);
+  });
+
+  it('rejects compare_headers naming set-cookie even with no block', () => {
+    // Unconditional: the generic header path compares a single value and drops
+    // the rest of a multi-cookie response, so the entry is never right.
+    const found = issuesOf(withCompare('headers: { compare: [content-type, Set-Cookie] }'));
+    expect(found.map((issue) => issue.path)).toEqual(['steps[0].compare.headers.compare']);
+    expect(found[0].message).toMatch(/use a 'set_cookie' block instead/);
+  });
+
+  it('allows compare_headers naming location when no location block is present', () => {
+    expect(paths(withCompare('headers: { compare: [location] }'))).toEqual([]);
   });
 
   it('counts a dimension block as inline behavioral rules (contract exclusion)', () => {

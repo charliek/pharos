@@ -83,8 +83,12 @@ map keeps only the last one) and `Location` needs URL semantics. Declaring
 either block anywhere — service `defaults` or a route's `comparison` — turns
 that dimension on; omitting it everywhere means it is not compared at all. A
 block that is present but empty (`location: {}`) takes every default shown
-above. Listing `set-cookie` or `location` in `compare_headers` while the
-corresponding block is present is a **load-time validation error**.
+above. Naming these dimensions in `compare_headers` (any case) is a
+**load-time validation error** — drop the entry — though the two differ in
+when it fires. `set-cookie` is rejected unconditionally:
+`compare_headers` reads the single-value header map, so a multi-cookie response
+would be compared on one value with the rest dropped; use a `set_cookie` block.
+`location` is rejected only while a `location` block is present.
 
 Cookies pair by name (duplicates pair positionally within the name group);
 attribute names are case-insensitive, attribute values exact, cookie names

@@ -9,7 +9,14 @@ import {
   locationBlockSchema,
   setCookieBlockSchema,
 } from '../comparison/rules';
-import { BODYLESS_METHODS, HTTP_METHODS, type HttpMethod } from '../execution/http-client';
+import {
+  BODYLESS_METHODS,
+  conflictingFormContentType,
+  FORM_MEDIA_TYPE,
+  HTTP_METHODS,
+  type HttpMethod,
+} from '../execution/http-client';
+import { containsTemplate } from '../execution/variables';
 
 /**
  * Request methods a scenario may issue (spec Sections 4.6 and 9.1) — the client's
@@ -110,18 +117,38 @@ const requestSchema = z
         }
       }
     }
-    // A GET `form` has no meaning (there is no urlencoded-body sense for a
-    // method that carries its data in the query string) and would otherwise
-    // reach the client and `fetch` as a body on GET, producing a confusing
-    // network-layer error (spec Sections 9.1 and 9.6). `body` on GET is left
-    // alone — pre-existing, silently-ignored behavior — this only targets
-    // `form`.
-    if (request.method === 'GET' && request.form !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['form'],
-        message: 'method GET must not set request.form (a GET form has no meaning)',
-      });
+    // A GET `body`/`form` has no meaning (there is no urlencoded- or JSON-body
+    // sense for a method that carries its data in the query string) and would
+    // otherwise reach the client and `fetch` as a body on GET, producing a
+    // confusing network-layer error (spec Sections 9.1 and 9.6).
+    if (request.method === 'GET') {
+      for (const field of ['body', 'form'] as const) {
+        if (request[field] !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `method GET must not set request.${field} (a GET ${field} has no meaning)`,
+          });
+        }
+      }
+    }
+    // `request.form` always urlencodes and implies FORM_MEDIA_TYPE; an explicit
+    // content-type header naming a different media type would ship a body
+    // labeled as something it isn't, silently. Parameters (`; charset=utf-8`)
+    // are fine — only the media type itself must match (spec Section 9.6).
+    // This runs before the runner's variable substitution (spec Section 7.1),
+    // so a templated value (`{{ variables.ct }}`) cannot be judged yet — skip
+    // it here and let the client's post-substitution check (which sees the
+    // resolved value) be the enforcement point for that case.
+    if (request.form !== undefined) {
+      const conflict = conflictingFormContentType(request.headers);
+      if (conflict && !containsTemplate(conflict.headerValue)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['headers', conflict.headerName],
+          message: `request.form implies content-type '${FORM_MEDIA_TYPE}', but request.headers.${conflict.headerName} sets '${conflict.headerValue}' — remove the header or correct it to match (spec Section 9.6)`,
+        });
+      }
     }
   });
 
@@ -140,6 +167,10 @@ const extractRuleSchema = z
   .object({
     from: z.enum(EXTRACT_SOURCES),
     path: z.string().min(1),
+    // Marks a body extraction's value a secret, so it is masked wherever it is
+    // later substituted — the `$.access_token` case (spec Section 8.5). Header
+    // and Set-Cookie extractions are sensitive automatically and need no flag.
+    sensitive: z.boolean().optional(),
   })
   .strict()
   .superRefine((rule, ctx) => {
@@ -147,6 +178,17 @@ const extractRuleSchema = z
     // name; set_cookie extraction uses a cookie name (spec Section 4.6).
     if (rule.from.endsWith('.body')) {
       addJsonPathIssue(ctx, ['path'], rule.path);
+    }
+    // `sensitive: false` beside a header/Set-Cookie source reads as an opt-out
+    // and is not one — those values are always registered. Silently ignoring it
+    // would leave the author believing the value is unmasked (or that they had
+    // turned masking off); refuse at load instead.
+    if (rule.sensitive === false && !rule.from.endsWith('.body')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sensitive'],
+        message: `extract from '${rule.from}' is always sensitive — header and Set-Cookie values are registered as secrets automatically and cannot be opted out; remove 'sensitive: false'`,
+      });
     }
   });
 
@@ -239,8 +281,9 @@ const compareSchema = z
   })
   .strict()
   .superRefine((compare, ctx) => {
+    // `set-cookie` is rejected on its own (the generic header path is lossy);
+    // `location` only when its block is declared beside it (spec Section 8.6).
     for (const name of dimensionHeaderConflicts(compare.headers?.compare, {
-      set_cookie: Boolean(compare.set_cookie),
       location: Boolean(compare.location),
     })) {
       ctx.addIssue({
@@ -291,6 +334,19 @@ const compareSchema = z
           }
         }
       }
+    }
+    // The converse of the rule above: `compare()` reads `expect` only in the
+    // explicit_expectations branch, so an expect block beside any other strategy
+    // is silently ignored — the run compares something else entirely and a pass
+    // looks like the author's expectations held. Reject at load (fail closed).
+    // `custom` is no exception: a comparator hook owns its own assertions and
+    // never sees `expect`, so pairing the two is the same mispairing.
+    if (compare.expect !== undefined && compare.strategy !== 'explicit_expectations') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expect'],
+        message: `compare.expect is only read by strategy 'explicit_expectations' — strategy '${compare.strategy}' ignores it; switch compare.strategy to 'explicit_expectations' or remove compare.expect`,
+      });
     }
     if (compare.strategy === 'custom' && !compare.comparator) {
       ctx.addIssue({

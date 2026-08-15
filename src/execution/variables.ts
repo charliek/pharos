@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getAtPath, parseJsonPath } from '../comparison/jsonpath';
+import type { SensitiveValues } from '../comparison/sensitive';
 import type { HttpResponseRecord } from './http-client';
 
 /**
@@ -20,10 +21,32 @@ export class VariableError extends Error {
 export interface VariableContext {
   variables: Record<string, unknown>;
   env: NodeJS.ProcessEnv;
+  /**
+   * The scenario-scoped registry of extracted secret values (spec Section 8.5),
+   * a parallel structure to `variables`: the runner creates one per scenario and
+   * every output boundary masks through it. Optional so that callers which only
+   * substitute (hooks, validators) need not carry one — masking is applied where
+   * data *leaves* execution, not where it is substituted.
+   */
+  sensitive?: SensitiveValues;
 }
 
 const WHOLE_TEMPLATE = /^\s*\{\{\s*(.+?)\s*\}\}\s*$/;
 const EMBEDDED_TEMPLATE = /\{\{\s*(.+?)\s*\}\}/g;
+// Non-global twin of EMBEDDED_TEMPLATE, used only to test for a template's
+// presence — a global regex's `.test()` carries `lastIndex` state across
+// calls, which is a footgun for a detector meant to be called repeatedly.
+const TEMPLATE_PRESENT = /\{\{\s*(.+?)\s*\}\}/;
+
+/**
+ * True when `text` contains `{{ ... }}` template syntax (spec Section 7.1).
+ * For validators that run before substitution (e.g. the scenario schema) and
+ * cannot resolve a templated value — they defer the check it would otherwise
+ * run to whatever inspects the value after `resolveRequest` substitutes it.
+ */
+export function containsTemplate(text: string): boolean {
+  return TEMPLATE_PRESENT.test(text);
+}
 
 function lookupVariable(variables: Record<string, unknown>, path: string, expr: string): unknown {
   if (path === '') {
@@ -126,6 +149,20 @@ function setCookieValue(setCookie: string[], name: string): string | undefined {
     if (pair.slice(0, eq).trim() === name) found = pair.slice(eq + 1).trim();
   }
   return found;
+}
+
+/**
+ * Whether an extract rule's value must be registered as sensitive (spec Section
+ * 8.5). Header and `Set-Cookie` values are secret-bearing by construction — a
+ * session cookie, an `Authorization` echo, a signed redirect `Location` — so
+ * they register automatically, with no opt-out (the schema refuses `sensitive:
+ * false` beside those sources). A body extraction is ordinary data unless the
+ * author says otherwise with `sensitive: true` (the `$.access_token` case).
+ */
+export function isSensitiveExtract(rule: { from: string; sensitive?: boolean }): boolean {
+  return (
+    rule.sensitive === true || rule.from.endsWith('.headers') || rule.from.endsWith('.set_cookie')
+  );
 }
 
 /** Resolve an extract rule against the available responses (spec Section 4.6). */
