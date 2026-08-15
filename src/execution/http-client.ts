@@ -144,14 +144,17 @@ function assertRequestShape(spec: HttpRequestSpec): void {
       `method ${spec.method} must not carry a body or form (spec Section 9.1)`,
     );
   }
-  // A GET `form` reaches `applyBody` and lands on `fetch` with a body on a
-  // method whose semantics have no body — `fetch` throws a confusing
-  // network-layer error instead of a clear one, and a GET form has no
-  // meaning to begin with (spec Sections 9.1 and 9.6). `body` on GET is left
-  // alone deliberately: it is pre-existing, silently-ignored behavior
-  // (`applyBody` skips it for GET) that this fix does not touch.
-  if (spec.form !== undefined && spec.method === 'GET') {
-    throw new RequestShapeError('method GET must not carry a form body (spec Section 9.6)');
+  // A GET `body`/`form` reaches `applyBody` and lands on `fetch` with a body
+  // on a method whose semantics have no body — `fetch` throws a confusing
+  // network-layer error instead of a clear one, and a GET body/form has no
+  // meaning to begin with (spec Sections 9.1 and 9.6).
+  if (spec.method === 'GET') {
+    if (spec.form !== undefined) {
+      throw new RequestShapeError('method GET must not carry a form body (spec Section 9.6)');
+    }
+    if (spec.body !== undefined) {
+      throw new RequestShapeError('method GET must not carry a body (spec Section 9.6)');
+    }
   }
 }
 
@@ -171,7 +174,7 @@ function applyBody(init: RequestInit, headers: Headers, spec: HttpRequestSpec): 
     }
     return;
   }
-  if (spec.body === undefined || spec.method === 'GET') return;
+  if (spec.body === undefined) return;
   if (typeof spec.body === 'string') {
     init.body = spec.body;
     return;

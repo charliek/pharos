@@ -270,6 +270,11 @@ steps:
     expect(paths(yaml)).toContain('steps[0].request.form');
   });
 
+  it('rejects a body on a GET request (a GET body has no meaning)', () => {
+    const yaml = withRequest('method: GET', 'path: /users', 'body: { a: 1 }');
+    expect(paths(yaml)).toContain('steps[0].request.body');
+  });
+
   it('accepts follow_redirects and a form body', () => {
     const yaml = withRequest(
       'method: POST',

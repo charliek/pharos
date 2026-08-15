@@ -276,6 +276,17 @@ describe('sendRequest', () => {
     expect(record.error?.message).toMatch(/form/);
   });
 
+  it('refuses a body on GET as a request error (never throws)', async () => {
+    const record = await sendRequest(
+      { baseUrl: 'http://127.0.0.1:1' },
+      { method: 'GET', path: '/x', body: { a: 1 } },
+    );
+    expect(record.status).toBe(0);
+    expect(record.error?.type).toBe('request');
+    expect(record.error?.message).toContain('GET');
+    expect(record.error?.message).toMatch(/body/);
+  });
+
   it('refuses body and form together as a request error (never throws)', async () => {
     const record = await sendRequest(
       { baseUrl: 'http://127.0.0.1:1' },
