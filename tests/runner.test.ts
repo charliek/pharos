@@ -167,6 +167,40 @@ steps:
     expect(readArtifacts('nonjson.diff', 'get')).not.toContain('SECRET-PLAINTEXT-TOKEN');
   });
 
+  it('writes a urlencoded form into the artifact with configured secret fields masked', async () => {
+    legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: false }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: form.diff
+name: form
+service: s
+tags: [read]
+mode: compare_live
+steps:
+  - id: token
+    request:
+      method: POST
+      path: /oauth2/token
+      form: { grant_type: password, password: SECRET-FORM-PASSWORD }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(
+      scenario,
+      'test.yaml',
+      config({ redaction: { headers: [], json_paths: ['$.password'], query_params: [] } }),
+      registry,
+    );
+    expect(result.pass).toBe(false);
+    const artifacts = readArtifacts('form.diff', 'token');
+    // The form is recorded (a body is a body), unencoded and path-redacted.
+    expect(artifacts).toContain('grant_type');
+    expect(artifacts).not.toContain('SECRET-FORM-PASSWORD');
+    expect(artifacts).toContain(REDACTED);
+  });
+
   it('extracts a value and uses it in a later step', async () => {
     legacyServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 'abc' }));
     newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 'abc' }));

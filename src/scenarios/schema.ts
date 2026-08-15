@@ -167,6 +167,10 @@ const extractRuleSchema = z
   .object({
     from: z.enum(EXTRACT_SOURCES),
     path: z.string().min(1),
+    // Marks a body extraction's value a secret, so it is masked wherever it is
+    // later substituted — the `$.access_token` case (spec Section 8.5). Header
+    // and Set-Cookie extractions are sensitive automatically and need no flag.
+    sensitive: z.boolean().optional(),
   })
   .strict()
   .superRefine((rule, ctx) => {
@@ -174,6 +178,17 @@ const extractRuleSchema = z
     // name; set_cookie extraction uses a cookie name (spec Section 4.6).
     if (rule.from.endsWith('.body')) {
       addJsonPathIssue(ctx, ['path'], rule.path);
+    }
+    // `sensitive: false` beside a header/Set-Cookie source reads as an opt-out
+    // and is not one — those values are always registered. Silently ignoring it
+    // would leave the author believing the value is unmasked (or that they had
+    // turned masking off); refuse at load instead.
+    if (rule.sensitive === false && !rule.from.endsWith('.body')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sensitive'],
+        message: `extract from '${rule.from}' is always sensitive — header and Set-Cookie values are registered as secrets automatically and cannot be opted out; remove 'sensitive: false'`,
+      });
     }
   });
 

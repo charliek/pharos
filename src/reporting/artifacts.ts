@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { redactHeaders, redactJsonValue, redactQuery, redactUrl } from '../comparison/redaction';
+import { maskText, maskValue, type SensitiveValues } from '../comparison/sensitive';
 import type { RedactionTargets } from '../config/config';
 import type { HttpRequestSpec, HttpResponseRecord } from '../execution/http-client';
 
@@ -8,6 +9,11 @@ import type { HttpRequestSpec, HttpResponseRecord } from '../execution/http-clie
  * Redacted failure artifacts (spec Section 11.4). On a failed comparison Pharos
  * writes the request, both responses, and the diff under the report directory —
  * always passed through redaction so no secret reaches disk (Section 8.5).
+ *
+ * Two independent passes, both required: the operator's static name/path lists
+ * (headers, JSON paths, query params) and the run's registry of values
+ * extracted from secret-bearing sources, which catches the same secret after it
+ * has been substituted into a field no static list names.
  */
 
 export interface ArtifactInputs {
@@ -38,30 +44,50 @@ function redactedBody(body: unknown, paths: string[]): unknown {
   return NON_JSON_NOTE;
 }
 
-function redactedResponse(response: HttpResponseRecord, redaction: RedactionTargets): unknown {
+function redactedResponse(
+  response: HttpResponseRecord,
+  redaction: RedactionTargets,
+  sensitive?: SensitiveValues,
+): unknown {
   const body =
     response.bodyJson !== undefined
       ? redactedBody(response.bodyJson, redaction.json_paths)
       : response.bodyText === ''
         ? ''
         : NON_JSON_NOTE;
-  return {
-    status: response.status,
-    headers: redactHeaders(response.headers, redaction.headers),
-    body,
-    durationMs: response.durationMs,
-    ...(response.error ? { error: response.error } : {}),
-  };
+  // Masked structurally, before `writeJson` serializes: a value escaped by the
+  // JSON encoder would no longer match as a literal string afterwards.
+  return maskValue(
+    {
+      status: response.status,
+      headers: redactHeaders(response.headers, redaction.headers),
+      body,
+      durationMs: response.durationMs,
+      ...(response.error ? { error: response.error } : {}),
+    },
+    sensitive,
+  );
 }
 
-function redactedRequest(request: HttpRequestSpec, redaction: RedactionTargets): unknown {
-  return {
-    method: request.method,
-    path: redactUrl(request.path, redaction.query_params),
-    query: redactQuery(request.query, redaction.query_params),
-    headers: request.headers ? redactHeaders(request.headers, redaction.headers) : {},
-    body: redactedBody(request.body, redaction.json_paths),
-  };
+function redactedRequest(
+  request: HttpRequestSpec,
+  redaction: RedactionTargets,
+  sensitive?: SensitiveValues,
+): unknown {
+  return maskValue(
+    {
+      method: request.method,
+      path: redactUrl(request.path, redaction.query_params),
+      query: redactQuery(request.query, redaction.query_params),
+      headers: request.headers ? redactHeaders(request.headers, redaction.headers) : {},
+      body: redactedBody(request.body, redaction.json_paths),
+      // A urlencoded `form` is a request body like any other and belongs in the
+      // artifact — recorded as the unencoded map, so redaction and masking see
+      // the values themselves rather than their `+`/percent-escaped forms.
+      ...(request.form ? { form: redactJsonValue(request.form, redaction.json_paths) } : {}),
+    },
+    sensitive,
+  );
 }
 
 function writeJson(dir: string, name: string, value: unknown): void {
@@ -75,6 +101,7 @@ export function writeFailureArtifacts(
   stepId: string,
   inputs: ArtifactInputs,
   redaction: RedactionTargets,
+  sensitive?: SensitiveValues,
 ): string {
   const dir = join(reportDir, 'artifacts', scenarioId, stepId);
   mkdirSync(dir, { recursive: true });
@@ -82,11 +109,20 @@ export function writeFailureArtifacts(
     ...redaction,
     headers: [...new Set([...redaction.headers, ...ALWAYS_REDACTED_HEADERS])],
   };
-  if (inputs.request) writeJson(dir, 'request.json', redactedRequest(inputs.request, safe));
-  if (inputs.legacy) writeJson(dir, 'legacy-response.json', redactedResponse(inputs.legacy, safe));
-  if (inputs.candidate) {
-    writeJson(dir, 'new-response.json', redactedResponse(inputs.candidate, safe));
+  if (inputs.request) {
+    writeJson(dir, 'request.json', redactedRequest(inputs.request, safe, sensitive));
   }
-  if (inputs.diffText) writeFileSync(join(dir, 'diff.txt'), `${inputs.diffText}\n`);
+  if (inputs.legacy) {
+    writeJson(dir, 'legacy-response.json', redactedResponse(inputs.legacy, safe, sensitive));
+  }
+  if (inputs.candidate) {
+    writeJson(dir, 'new-response.json', redactedResponse(inputs.candidate, safe, sensitive));
+  }
+  // The diff text arrives already masked (comparison masks its mismatches
+  // before rendering); masking again is idempotent and keeps this writer safe
+  // for any caller-supplied text.
+  if (inputs.diffText) {
+    writeFileSync(join(dir, 'diff.txt'), `${maskText(inputs.diffText, sensitive)}\n`);
+  }
   return dir;
 }

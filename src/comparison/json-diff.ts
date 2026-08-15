@@ -104,7 +104,15 @@ export function diffJson(
 
 const MAX_PREVIEW = 200;
 
-/** A bounded, single-line preview of a value for diff output. */
+/**
+ * A bounded, single-line preview of a value for diff output.
+ *
+ * Truncation here is why extracted-secret masking runs on the structured
+ * mismatches *before* rendering (`compare.ts`'s `toResult`): a long token
+ * clipped to its first 197 characters would defeat any exact-string masking
+ * applied to the finished diff text, leaking a usable prefix. By the time a
+ * value reaches this function it is already masked, so clipping is safe.
+ */
 function preview(value: unknown): string {
   if (value === undefined) return '∅';
   const text = stableStringify(value);

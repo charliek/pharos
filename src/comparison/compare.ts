@@ -13,6 +13,7 @@ import {
 } from './redaction';
 import type { ComparisonResult, ComparisonStrategy, Mismatch } from './result';
 import type { ComparisonRules } from './rules';
+import { maskMismatches, maskText, maskValue, type SensitiveValues } from './sensitive';
 
 /** Explicit expectations asserted against a single (new) response. */
 export interface ExpectSpec extends HeaderExpectations {
@@ -46,6 +47,12 @@ export interface CompareRequest {
   sensitiveHeaders?: string[];
   /** Query-parameter names to mask on top of the built-in secret-bearing ones. */
   sensitiveQueryParams?: string[];
+  /**
+   * Values extracted from secret-bearing sources during this scenario run (spec
+   * Section 8.5). Masked out of every mismatch — and of the view a custom
+   * comparator sees — no matter which field they were substituted into.
+   */
+  sensitiveValues?: SensitiveValues;
   /**
    * The URL of the request that produced `legacy` — what a relative `Location`
    * resolves against (spec Section 8.6). Absent for a recorded response whose
@@ -146,16 +153,23 @@ function vocabularyFor(req: CompareRequest): DiffVocabulary {
   return 'two_sided';
 }
 
+/**
+ * Assemble the result. Extracted-secret masking (spec Section 8.5) runs here,
+ * on the structured mismatches, **before** the diff text is rendered from them:
+ * the renderer's bounded preview truncates, so masking afterwards could leave a
+ * clipped prefix of a long token in the diff.
+ */
 function toResult(
   req: CompareRequest,
   mismatches: Mismatch[],
   truncated = false,
 ): ComparisonResult {
+  const masked = maskMismatches(mismatches, req.sensitiveValues);
   return {
-    pass: mismatches.length === 0,
-    summary: summarize(req.strategy, mismatches),
-    mismatches,
-    diffText: mismatches.length > 0 ? renderMismatches(mismatches, vocabularyFor(req)) : undefined,
+    pass: masked.length === 0,
+    summary: summarize(req.strategy, masked),
+    mismatches: masked,
+    diffText: masked.length > 0 ? renderMismatches(masked, vocabularyFor(req)) : undefined,
     ...(truncated ? { diffTruncated: true } : {}),
   };
 }
@@ -205,16 +219,21 @@ const ALWAYS_REDACTED_COMPARATOR_HEADERS = ['set-cookie', 'cookie'];
 /**
  * A redacted view of a response for a custom comparator: secret JSON paths and
  * sensitive headers are masked so a comparator cannot surface them into a
- * mismatch (and from there into a report).
+ * mismatch (and from there into a report). Extracted secret values are masked
+ * here too, wherever in the response they appear — a comparator sees the same
+ * masked view every other output surface does.
  */
 function redactedView(
   response: HttpResponseRecord,
   rules: ComparisonRules,
   sensitiveHeaders: string[],
+  sensitive: SensitiveValues | undefined,
 ): HttpResponseRecord {
+  // Masked structurally, then re-serialized into `bodyText` below: masking the
+  // serialized text instead would miss a value the encoder escaped.
   const bodyJson =
     response.bodyJson !== undefined
-      ? redactJsonValue(response.bodyJson, rules.json.redact_paths)
+      ? maskValue(redactJsonValue(response.bodyJson, rules.json.redact_paths), sensitive)
       : undefined;
   // Set-Cookie values are secrets, so the comparator view masks every
   // captured entry unconditionally — a scenario's `sensitiveHeaders` config
@@ -226,12 +245,15 @@ function redactedView(
   ];
   return {
     status: response.status,
-    headers: redactHeaders(response.headers, safeSensitiveHeaders),
+    headers: maskValue(redactHeaders(response.headers, safeSensitiveHeaders), sensitive),
     setCookie: response.setCookie.map(() => REDACTED),
-    bodyText: bodyJson !== undefined ? JSON.stringify(bodyJson) : response.bodyText,
+    bodyText:
+      bodyJson !== undefined ? JSON.stringify(bodyJson) : maskText(response.bodyText, sensitive),
     bodyJson,
     durationMs: response.durationMs,
-    ...(response.error ? { error: response.error } : {}),
+    ...(response.error
+      ? { error: { ...response.error, message: maskText(response.error.message, sensitive) } }
+      : {}),
   };
 }
 
@@ -240,9 +262,10 @@ function runCustom(req: CompareRequest): ComparisonResult {
     throw new Error("strategy 'custom' requires a resolved comparator");
   }
   const sensitiveHeaders = req.sensitiveHeaders ?? [];
+  const values = req.sensitiveValues;
   const result = req.comparator({
-    legacy: req.legacy ? redactedView(req.legacy, req.rules, sensitiveHeaders) : undefined,
-    candidate: redactedView(req.candidate, req.rules, sensitiveHeaders),
+    legacy: req.legacy ? redactedView(req.legacy, req.rules, sensitiveHeaders, values) : undefined,
+    candidate: redactedView(req.candidate, req.rules, sensitiveHeaders, values),
     rules: req.rules,
     args: req.comparatorArgs,
   });
@@ -251,10 +274,14 @@ function runCustom(req: CompareRequest): ComparisonResult {
   const raw = Array.isArray(result) ? result : result.mismatches;
   const mismatches = redactHeaderMismatches(raw, req.sensitiveHeaders ?? []);
   if (Array.isArray(result)) return toResult(req, mismatches);
+  // A comparator that returned a whole result keeps its own summary — masked
+  // like everything else, since a hand-written summary can embed a value.
+  const masked = maskMismatches(mismatches, values);
   return {
     ...result,
-    mismatches,
-    diffText: mismatches.length > 0 ? renderMismatches(mismatches, vocabularyFor(req)) : undefined,
+    summary: maskText(result.summary, values),
+    mismatches: masked,
+    diffText: masked.length > 0 ? renderMismatches(masked, vocabularyFor(req)) : undefined,
   };
 }
 

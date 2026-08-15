@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import type { CustomComparator } from '../comparison/compare';
 import type { ComparisonRules } from '../comparison/rules';
+import { maskText, SensitiveValues } from '../comparison/sensitive';
 import type { PharosConfig } from '../config/config';
 import type { ContractRegistry } from '../contract/load';
 import { resolveScenarioContractRules } from '../contract/resolve';
@@ -54,7 +55,16 @@ export async function runScenario(
   const send = deps.send ?? sendRequest;
   const env = deps.env ?? process.env;
   const hooks = deps.hooks ?? {};
-  const ctx: VariableContext = { variables: structuredClone(scenario.variables ?? {}), env };
+  // Scenario-scoped, like the variable store it sits beside: values extracted
+  // from secret-bearing sources are registered here as the scenario runs, and
+  // every output boundary masks through it (spec Section 8.5). It is created
+  // and discarded with the run, so nothing leaks into the next scenario.
+  const sensitive = new SensitiveValues();
+  const ctx: VariableContext = {
+    variables: structuredClone(scenario.variables ?? {}),
+    env,
+    sensitive,
+  };
   // Jars are created here and discarded with the run: one per target so legacy
   // and new never share cookies, and none survives into the next scenario
   // (spec Section 4.6).
@@ -76,7 +86,9 @@ export async function runScenario(
       error === undefined && steps.length === scenario.steps.length && steps.every((s) => s.pass),
     skipped: false,
     steps,
-    error,
+    // A lifecycle error is free text from a hook, which reads the same variable
+    // store the extractions write to — mask it like a step's error.
+    error: error === undefined ? undefined : maskText(error, sensitive),
     durationMs: performance.now() - start,
   });
 
@@ -106,7 +118,7 @@ export async function runScenario(
         await runHooks(step.after?.hooks, stepHookCtx, hooks);
       } catch (error) {
         result.pass = false;
-        result.error = result.error ?? `after hook: ${messageOf(error)}`;
+        result.error = result.error ?? maskText(`after hook: ${messageOf(error)}`, sensitive);
       }
       steps.push(result);
       if (!result.pass) break; // stop-on-first-failure within a scenario

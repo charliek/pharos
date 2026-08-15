@@ -47,6 +47,7 @@ steps:
       timeoutMs: 5000                # optional per-request override
     extract:
       userId: { from: new.body, path: $.id }
+      token: { from: new.body, path: $.access_token, sensitive: true }
     recording:                       # legacy_record / replay
       fixture: users/get-user.json
       safe_headers: [content-type]   # only these headers are recorded
@@ -70,6 +71,31 @@ subset; header extraction uses a header name; `*.set_cookie` extraction uses a
 cookie **name** and yields that cookie's value from the lossless multi-value
 capture (last occurrence wins; attributes are never extracted). `response.*` is
 only valid in single-target modes.
+
+### Sensitive extractions
+
+An extracted value stays masked in every output surface — failure artifacts,
+recordings, diff text, error messages, and the view a custom comparator sees —
+wherever a later step substitutes it. What the wire carries is unaffected; only
+output is masked, and the mask names the variable: `[REDACTED:token]`.
+
+- `*.headers` and `*.set_cookie` extractions are sensitive **automatically**: a
+  cookie or header value is secret-bearing by construction. There is no opt-out
+  — `sensitive: false` beside one of those sources is a validation error.
+- A body extraction is ordinary data unless you say otherwise. Add
+  `sensitive: true` for the `$.access_token` case.
+
+A whole value is masked at any length; a value embedded in a longer string
+(`Bearer <token>`) is masked from eight characters up, so a very short value
+cannot corrupt unrelated output — the flip side is that a secret shorter than
+eight characters **does** survive inside a larger string, and Pharos warns at
+extraction time (naming the variable, never the value) when that applies. An
+extracted object or array is registered leaf by leaf, so a credential bundle
+masks every token inside it. Percent- and form-encoded forms are masked too,
+so a secret that reached a URL query or a urlencoded body cannot survive its
+encoding. A recording is masked as well — deliberately, and fail-closed: a
+replay that only works because a fixture stored a live credential will fail at
+the comparison instead. Re-record with a fresh one.
 
 ## Comparison strategies
 

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { redactJsonValue, redactQuery, redactUrl } from '../comparison/redaction';
+import { maskText, maskValue, type SensitiveValues } from '../comparison/sensitive';
 import type { RedactionTargets } from '../config/config';
 import { readDocumentFile } from '../document';
 import { ValidationError, validateWithSchema } from '../errors';
@@ -69,6 +70,12 @@ export interface BuildRecordingParams {
   /** Header names allowed into the recording; all others are dropped. */
   safeHeaders: string[];
   redaction: RedactionTargets;
+  /**
+   * Values extracted from secret-bearing sources during this scenario run (spec
+   * Section 8.5). Masked out of the recording — request *and* response — even
+   * where `safe_headers` would otherwise persist them.
+   */
+  sensitive?: SensitiveValues;
 }
 
 function keepSafeHeaders(
@@ -99,14 +106,25 @@ function recordableBody(body: unknown, paths: string[]): unknown {
  * bodies have their secret paths masked (and the cached text is regenerated to
  * match); query params are masked. Scalar and non-JSON bodies are not persisted —
  * they can't be path-redacted, so a note is stored instead.
+ *
+ * Extracted secret values (spec Section 8.5) are masked across the **whole**
+ * recording, request and response alike, including a `safe_headers`-declared
+ * `Set-Cookie`. That is deliberate and fails closed: a replay chain that only
+ * works because a fixture stored a live credential is refused by construction —
+ * the marker will not match the live service, so the replay fails loudly at the
+ * comparison instead of quietly depending on a secret checked into the repo.
+ * Re-record with a fresh credential rather than reaching for the raw value.
  */
 export function buildRecording(params: BuildRecordingParams): Recording {
   const safe = new Set(params.safeHeaders.map((h) => h.toLowerCase()));
+  const sensitive = params.sensitive;
 
   let bodyJson = params.response.bodyJson;
   let bodyText: string;
   if (bodyJson !== undefined && typeof bodyJson === 'object' && bodyJson !== null) {
-    bodyJson = redactJsonValue(bodyJson, params.redaction.json_paths);
+    // Masked structurally, then re-serialized: masking `bodyText` after the
+    // fact would miss any value the JSON encoder escaped.
+    bodyJson = maskValue(redactJsonValue(bodyJson, params.redaction.json_paths), sensitive);
     bodyText = JSON.stringify(bodyJson);
   } else {
     bodyJson = undefined;
@@ -121,24 +139,37 @@ export function buildRecording(params: BuildRecordingParams): Recording {
     stepId: params.stepId,
     recordedAt: params.recordedAt,
     ...(params.environment ? { environment: params.environment } : {}),
-    request: {
-      method: params.request.method,
-      path: redactUrl(params.request.path, params.redaction.query_params),
-      query: redactQuery(params.request.query, params.redaction.query_params),
-      headers: keepSafeHeaders(params.request.headers, safe),
-      body: requestBody,
-      timeoutMs: params.request.timeoutMs,
-    },
+    request: maskValue(
+      {
+        method: params.request.method,
+        path: redactUrl(params.request.path, params.redaction.query_params),
+        query: redactQuery(params.request.query, params.redaction.query_params),
+        headers: keepSafeHeaders(params.request.headers, safe),
+        body: requestBody,
+        timeoutMs: params.request.timeoutMs,
+      },
+      sensitive,
+    ),
     response: {
       status: params.response.status,
-      headers: keepSafeHeaders(params.response.headers, safe),
+      headers: maskValue(keepSafeHeaders(params.response.headers, safe), sensitive),
       // Cookie values are secrets: they are persisted only when the scenario
-      // declares set-cookie safe, the same discipline keepSafeHeaders applies.
-      ...(safe.has('set-cookie') ? { set_cookie: params.response.setCookie } : {}),
+      // declares set-cookie safe, the same discipline keepSafeHeaders applies —
+      // and an extracted one is masked even then (see the doc comment).
+      ...(safe.has('set-cookie')
+        ? { set_cookie: params.response.setCookie.map((value) => maskText(value, sensitive)) }
+        : {}),
       bodyText,
       bodyJson,
       durationMs: params.response.durationMs,
-      ...(params.response.error ? { error: params.response.error } : {}),
+      ...(params.response.error
+        ? {
+            error: {
+              ...params.response.error,
+              message: maskText(params.response.error.message, sensitive),
+            },
+          }
+        : {}),
     },
   };
 }

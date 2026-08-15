@@ -400,6 +400,45 @@ steps:
     );
   });
 
+  // `sensitive` (spec Section 8.5) marks a body extraction's value a secret so
+  // it is masked wherever it is later substituted.
+  const sensitiveExtract = (from: string, path: string, sensitive: string) => `
+version: 1
+id: auth.token
+name: Token
+service: user-service
+tags: [read]
+mode: new_only_assert
+steps:
+  - id: login
+    request: { method: POST, path: /login }
+    extract:
+      accessToken:
+        from: ${from}
+        path: ${path}
+        sensitive: ${sensitive}
+    compare:
+      strategy: explicit_expectations
+      expect:
+        status: 200
+`;
+
+  it('accepts sensitive: true on a body extraction', () => {
+    expect(paths(sensitiveExtract('response.body', '$.access_token', 'true'))).toEqual([]);
+  });
+
+  it('accepts sensitive: false on a body extraction (the default)', () => {
+    expect(paths(sensitiveExtract('response.body', '$.access_token', 'false'))).toEqual([]);
+  });
+
+  it('rejects sensitive: false on a header or set_cookie extraction (no opt-out)', () => {
+    for (const from of ['response.headers', 'response.set_cookie']) {
+      const issues = issuesOf(sensitiveExtract(from, 'authorization', 'false'));
+      expect(issues.map((issue) => issue.path)).toContain('steps[0].extract.accessToken.sensitive');
+      expect(issues[0].message).toMatch(/always sensitive/);
+    }
+  });
+
   it('rejects an explicit_expectations block that asserts nothing', () => {
     const yaml = `
 version: 1
