@@ -23,7 +23,7 @@ so a normal `run` never writes a fixture, and **CI refuses recording updates by
 default**:
 
 ```bash
-bun run ftest -- record --scenario users.record-existing-user
+bun run ftest -- record --scenario users.replay-get-user-recording
 ```
 
 Recordings are redacted before they are written: only `safe_headers` are kept,
@@ -68,7 +68,7 @@ Fixtures are JSON (scenarios are YAML):
 ```json
 {
   "version": 1,
-  "scenarioId": "users.record-existing-user",
+  "scenarioId": "users.replay-get-user-recording",
   "stepId": "get-user",
   "recordedAt": "2024-01-01T00:00:00.000Z",
   "request": { "method": "GET", "path": "/users/user-123" },

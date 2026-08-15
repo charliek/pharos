@@ -130,6 +130,13 @@ function defaultWarn(message: string): void {
 const MAX_REGISTER_DEPTH = 32;
 const MAX_REGISTER_NODES = 10_000;
 
+/**
+ * What a masked structure renders where a container references itself. A note
+ * rather than `{}`, in the same spirit as the artifact writer's omitted-body
+ * note: an empty object would read as data the value never had.
+ */
+export const CIRCULAR_NOTE = '[circular reference omitted]';
+
 /** Mutable state threaded through one `register` walk. */
 interface WalkBudget {
   nodes: number;
@@ -342,6 +349,21 @@ export class SensitiveValues {
    */
   maskValue(value: unknown): unknown {
     if (this.candidates.length === 0) return value;
+    return this.maskNode(value, new WeakSet<object>());
+  }
+
+  /**
+   * One node of the masking walk. `path` holds the containers currently open —
+   * added on the way down and **removed on the way out**, so it detects a true
+   * cycle (a node reachable from itself) without collapsing a structure that
+   * merely repeats a shared child in two places, which is ordinary data and
+   * must still render twice.
+   *
+   * That is the opposite of {@link walk}'s never-deleted `seen`: registration
+   * is a set union over reachable scalars, where visiting a shared node once is
+   * enough, while masking *renders* and must reproduce every position.
+   */
+  private maskNode(value: unknown, path: WeakSet<object>): unknown {
     if (typeof value === 'string') return this.maskString(value);
     if (typeof value === 'number' || typeof value === 'bigint') {
       const text = scalarText(value);
@@ -351,13 +373,25 @@ export class SensitiveValues {
       // printing the secret.
       return name === undefined ? value : this.markerFor(name);
     }
-    if (Array.isArray(value)) return value.map((item) => this.maskValue(item));
     if (value !== null && typeof value === 'object') {
-      const out: Record<string, unknown> = {};
-      for (const [key, item] of Object.entries(value)) {
-        out[this.maskString(key)] = this.maskValue(item);
+      const container = value as object;
+      // A custom comparator may hand back a self-referencing `expected`/`actual`
+      // (spec Section 8.3 does not constrain the shape); recursing into it would
+      // exhaust the stack and take the whole comparison result down with it. The
+      // cycle renders as a note instead of `{}`, which would silently claim the
+      // value was an empty object.
+      if (path.has(container)) return CIRCULAR_NOTE;
+      path.add(container);
+      try {
+        if (Array.isArray(value)) return value.map((item) => this.maskNode(item, path));
+        const out: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value)) {
+          out[this.maskString(key)] = this.maskNode(item, path);
+        }
+        return out;
+      } finally {
+        path.delete(container);
       }
-      return out;
     }
     return value;
   }

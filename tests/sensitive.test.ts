@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { REDACTED } from '../src/comparison/redaction';
 import {
+  CIRCULAR_NOTE,
   MIN_SUBSTRING_LENGTH,
   maskMismatches,
   SensitiveValues,
@@ -236,6 +237,24 @@ describe('SensitiveValues — masking policy', () => {
       '[REDACTED:sid]': [{ auth: 'Bearer [REDACTED:sid]' }, '[REDACTED:pin]', 42],
       other: 'kept',
     });
+  });
+
+  it('renders a cycle as a note while masking the rest, and keeps a shared child twice', () => {
+    const values = new SensitiveValues();
+    values.register('sid', 'SECRET-SESSION-VALUE');
+    const node: Record<string, unknown> = { token: 'SECRET-SESSION-VALUE' };
+    node.self = node; // a container reachable from itself
+    const shared = { token: 'SECRET-SESSION-VALUE' };
+    const masked = values.maskValue({ node, a: shared, b: shared }) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(masked.node.token).toBe('[REDACTED:sid]');
+    expect(masked.node.self).toBe(CIRCULAR_NOTE);
+    // A child merely *shared* between two positions is ordinary data: it is not
+    // a cycle, so both positions render in full.
+    expect(masked.a).toEqual({ token: '[REDACTED:sid]' });
+    expect(masked.b).toEqual({ token: '[REDACTED:sid]' });
   });
 
   it('masks a mismatch end to end (path, message, expected, actual)', () => {
@@ -673,6 +692,38 @@ steps:
     expect(result.pass).toBe(false);
     expect(seen).not.toContain(SESSION);
     expect(seen).toContain('[REDACTED:sid]');
+    expect(JSON.stringify(result.steps[1].comparison)).not.toContain(SESSION);
+  });
+
+  it('survives a comparator returning a self-referencing mismatch value', async () => {
+    newServer = await loginServer();
+    const scenario = loginThen(
+      'prop.cyclic',
+      `  - id: use
+    request: { method: GET, path: /echo }
+    compare: { strategy: custom, comparator: cyclic }`,
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      comparators: {
+        // Nothing constrains a comparator's mismatch values to be acyclic; an
+        // unguarded mask would recurse until the stack died, taking the whole
+        // comparison result with it.
+        cyclic: () => {
+          const expected: Record<string, unknown> = { session: SESSION };
+          expected.self = expected;
+          return [
+            { path: '$.session', kind: 'custom', expected, actual: 'other', message: 'differs' },
+          ];
+        },
+      },
+    });
+    expect(result.pass).toBe(false);
+    // The result survived intact — the mismatch is still there, masked…
+    const mismatch = result.steps[1].comparison?.mismatches[0];
+    expect(mismatch?.message).toBe('differs');
+    expect(mismatch?.expected).toEqual({ session: '[REDACTED:sid]', self: CIRCULAR_NOTE });
+    // …and rendering it does not throw on the cycle either.
+    expect(result.steps[1].comparison?.diffText).toContain('[REDACTED:sid]');
     expect(JSON.stringify(result.steps[1].comparison)).not.toContain(SESSION);
   });
 });
