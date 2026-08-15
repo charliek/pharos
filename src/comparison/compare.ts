@@ -13,7 +13,7 @@ import {
 } from './redaction';
 import type { ComparisonResult, ComparisonStrategy, Mismatch } from './result';
 import type { ComparisonRules } from './rules';
-import { maskMismatches, maskText, maskValue, type SensitiveValues } from './sensitive';
+import { maskError, maskMismatches, maskText, maskValue, type SensitiveValues } from './sensitive';
 
 /** Explicit expectations asserted against a single (new) response. */
 export interface ExpectSpec extends HeaderExpectations {
@@ -52,7 +52,7 @@ export interface CompareRequest {
    * Section 8.5). Masked out of every mismatch — and of the view a custom
    * comparator sees — no matter which field they were substituted into.
    */
-  sensitiveValues?: SensitiveValues;
+  sensitive?: SensitiveValues;
   /**
    * The URL of the request that produced `legacy` — what a relative `Location`
    * resolves against (spec Section 8.6). Absent for a recorded response whose
@@ -164,7 +164,7 @@ function toResult(
   mismatches: Mismatch[],
   truncated = false,
 ): ComparisonResult {
-  const masked = maskMismatches(mismatches, req.sensitiveValues);
+  const masked = maskMismatches(mismatches, req.sensitive);
   return {
     pass: masked.length === 0,
     summary: summarize(req.strategy, masked),
@@ -251,9 +251,7 @@ function redactedView(
       bodyJson !== undefined ? JSON.stringify(bodyJson) : maskText(response.bodyText, sensitive),
     bodyJson,
     durationMs: response.durationMs,
-    ...(response.error
-      ? { error: { ...response.error, message: maskText(response.error.message, sensitive) } }
-      : {}),
+    ...(response.error ? { error: maskError(response.error, sensitive) } : {}),
   };
 }
 
@@ -262,10 +260,12 @@ function runCustom(req: CompareRequest): ComparisonResult {
     throw new Error("strategy 'custom' requires a resolved comparator");
   }
   const sensitiveHeaders = req.sensitiveHeaders ?? [];
-  const values = req.sensitiveValues;
+  const sensitive = req.sensitive;
   const result = req.comparator({
-    legacy: req.legacy ? redactedView(req.legacy, req.rules, sensitiveHeaders, values) : undefined,
-    candidate: redactedView(req.candidate, req.rules, sensitiveHeaders, values),
+    legacy: req.legacy
+      ? redactedView(req.legacy, req.rules, sensitiveHeaders, sensitive)
+      : undefined,
+    candidate: redactedView(req.candidate, req.rules, sensitiveHeaders, sensitive),
     rules: req.rules,
     args: req.comparatorArgs,
   });
@@ -276,10 +276,10 @@ function runCustom(req: CompareRequest): ComparisonResult {
   if (Array.isArray(result)) return toResult(req, mismatches);
   // A comparator that returned a whole result keeps its own summary — masked
   // like everything else, since a hand-written summary can embed a value.
-  const masked = maskMismatches(mismatches, values);
+  const masked = maskMismatches(mismatches, sensitive);
   return {
     ...result,
-    summary: maskText(result.summary, values),
+    summary: maskText(result.summary, sensitive),
     mismatches: masked,
     diffText: masked.length > 0 ? renderMismatches(masked, vocabularyFor(req)) : undefined,
   };

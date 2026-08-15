@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { redactJsonValue, redactQuery, redactUrl } from '../comparison/redaction';
-import { maskText, maskValue, type SensitiveValues } from '../comparison/sensitive';
+import { maskError, maskText, maskValue, type SensitiveValues } from '../comparison/sensitive';
 import type { RedactionTargets } from '../config/config';
 import { readDocumentFile } from '../document';
 import { ValidationError, validateWithSchema } from '../errors';
@@ -162,14 +162,7 @@ export function buildRecording(params: BuildRecordingParams): Recording {
       bodyText,
       bodyJson,
       durationMs: params.response.durationMs,
-      ...(params.response.error
-        ? {
-            error: {
-              ...params.response.error,
-              message: maskText(params.response.error.message, sensitive),
-            },
-          }
-        : {}),
+      ...(params.response.error ? { error: maskError(params.response.error, sensitive) } : {}),
     },
   };
 }

@@ -548,7 +548,7 @@ async function executeStep(
     comparatorArgs: step.compare.args,
     sensitiveHeaders: config.redaction.headers,
     sensitiveQueryParams: config.redaction.query_params,
-    sensitiveValues: ctx.sensitive,
+    sensitive: ctx.sensitive,
     legacyRequestUrl,
     candidateRequestUrl: sentNew.url,
   };

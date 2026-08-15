@@ -172,7 +172,7 @@ export class SensitiveValues {
   }
 
   private add(name: string, text: string): void {
-    if (text === '' || this.byText.has(text)) return; // first registration wins
+    if (this.byText.has(text)) return; // first registration wins
     this.byText.set(text, name);
     this.candidates.push({ text, name, order: this.order++ });
     this.candidates.sort((a, b) => b.text.length - a.text.length || a.order - b.order);
@@ -268,6 +268,22 @@ export class SensitiveValues {
 /** Mask a string with an optional registry (absent or empty = unchanged). */
 export function maskText(text: string, sensitive?: SensitiveValues): string {
   return sensitive === undefined || sensitive.isEmpty ? text : sensitive.maskString(text);
+}
+
+/**
+ * Mask an `HttpResponseRecord`-style error's `message`, preserving `type`. The
+ * one field of an error worth masking structurally: `type` is a fixed
+ * classifier (`'request'`, `'timeout'`, ...), never a value a response could
+ * carry a secret through. Shared by every output boundary that passes an
+ * error through unchanged otherwise (comparator view, recording, artifact).
+ */
+export function maskError<T extends { message: string }>(
+  error: T | undefined,
+  sensitive?: SensitiveValues,
+): T | undefined {
+  return error === undefined
+    ? undefined
+    : { ...error, message: maskText(error.message, sensitive) };
 }
 
 /**
