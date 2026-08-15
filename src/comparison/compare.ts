@@ -1,7 +1,7 @@
 import type { HttpResponseRecord } from '../execution/http-client';
 import { assertHeaderExpectations, type HeaderExpectations } from './expectations';
 import { compareLocation, compareSetCookie, type DimensionResult } from './headers';
-import { diffJson, renderMismatches } from './json-diff';
+import { type DiffVocabulary, diffJson, renderMismatches } from './json-diff';
 import { matchPathBetween, matchPathExpectation } from './matchers';
 import { normalizeJson } from './normalize';
 import {
@@ -123,16 +123,39 @@ function summarize(strategy: ComparisonStrategy, mismatches: Mismatch[]): string
     : `${mismatches.length} mismatch${mismatches.length === 1 ? '' : 'es'} (${strategy})`;
 }
 
+/**
+ * Which side vocabulary this request's diff should render with.
+ *
+ * `explicit_expectations` is expectation-sourced unconditionally: it never reads
+ * `req.legacy`, so even in `compare_live` its `expected` values are the
+ * scenario author's literals, not anything a legacy service sent.
+ *
+ * `custom` is the ambiguous one — it is the only other strategy
+ * `new_only_assert` permits, and the scenario's *mode* never reaches `compare()`
+ * (the step runner passes responses, not the mode). Rather than plumb the mode
+ * down just to re-derive it, key on the honest signal already on the request:
+ * a comparator handed no legacy response has no legacy side to have sourced an
+ * `expected` value from, so whatever it asserts came from the comparator itself.
+ * That is exactly the `new_only_assert` case — the two two-sided modes always
+ * populate `legacy` before comparing (a legacy transport error short-circuits to
+ * an execution failure and never reaches here).
+ */
+function vocabularyFor(req: CompareRequest): DiffVocabulary {
+  if (req.strategy === 'explicit_expectations') return 'expectation';
+  if (req.strategy === 'custom' && req.legacy === undefined) return 'expectation';
+  return 'two_sided';
+}
+
 function toResult(
-  strategy: ComparisonStrategy,
+  req: CompareRequest,
   mismatches: Mismatch[],
   truncated = false,
 ): ComparisonResult {
   return {
     pass: mismatches.length === 0,
-    summary: summarize(strategy, mismatches),
+    summary: summarize(req.strategy, mismatches),
     mismatches,
-    diffText: mismatches.length > 0 ? renderMismatches(mismatches) : undefined,
+    diffText: mismatches.length > 0 ? renderMismatches(mismatches, vocabularyFor(req)) : undefined,
     ...(truncated ? { diffTruncated: true } : {}),
   };
 }
@@ -227,11 +250,11 @@ function runCustom(req: CompareRequest): ComparisonResult {
   // comparator cannot leak a secret header value through its own diffText.
   const raw = Array.isArray(result) ? result : result.mismatches;
   const mismatches = redactHeaderMismatches(raw, req.sensitiveHeaders ?? []);
-  if (Array.isArray(result)) return toResult('custom', mismatches);
+  if (Array.isArray(result)) return toResult(req, mismatches);
   return {
     ...result,
     mismatches,
-    diffText: mismatches.length > 0 ? renderMismatches(mismatches) : undefined,
+    diffText: mismatches.length > 0 ? renderMismatches(mismatches, vocabularyFor(req)) : undefined,
   };
 }
 
@@ -308,9 +331,5 @@ export function compare(req: CompareRequest): ComparisonResult {
     }
   }
 
-  return toResult(
-    req.strategy,
-    redactHeaderMismatches(mismatches, req.sensitiveHeaders ?? []),
-    truncated,
-  );
+  return toResult(req, redactHeaderMismatches(mismatches, req.sensitiveHeaders ?? []), truncated);
 }

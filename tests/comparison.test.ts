@@ -290,3 +290,168 @@ describe('compare — custom', () => {
     expect(JSON.stringify(result)).not.toContain('SUPER-SECRET');
   });
 });
+
+/**
+ * Which side wording a rendered diff uses is a function of where the `expected`
+ * value came from, not of the mismatch kind. A two-sided comparison really does
+ * have a legacy response behind `expected`; an expectation assertion has only
+ * the scenario author's literal, so calling it `legacy:` would be a lie.
+ */
+describe('diffText vocabulary — two-sided comparisons say legacy / new', () => {
+  const rules = defaultComparisonRules();
+
+  it('renders a status mismatch with legacy / new', () => {
+    const result = compare({
+      strategy: 'json_semantic',
+      rules,
+      legacy: resp(200, {}),
+      candidate: resp(404, {}),
+    });
+    expect(result.diffText).toBe('$.status: status differs (legacy: 200, new: 404)');
+  });
+
+  it('renders a missing key as missing in new, naming the legacy value', () => {
+    const result = compare({
+      strategy: 'json_semantic',
+      rules,
+      legacy: resp(200, { a: 1 }),
+      candidate: resp(200, {}),
+    });
+    expect(result.diffText).toBe('$.a: missing in new (legacy: 1)');
+  });
+
+  it('renders an extra key as unexpected in new, naming the new value', () => {
+    const result = compare({
+      strategy: 'json_semantic',
+      rules,
+      legacy: resp(200, {}),
+      candidate: resp(200, { b: 'two' }),
+    });
+    expect(result.diffText).toBe('$.b: unexpected in new (new: "two")');
+  });
+
+  it('renders nested value and array-element differences with legacy / new', () => {
+    const result = compare({
+      strategy: 'json_semantic',
+      rules,
+      legacy: resp(200, { device: { name: 'A' }, items: [1, 2] }),
+      candidate: resp(200, { device: { name: 'B' }, items: [1] }),
+    });
+    expect(result.diffText).toBe(
+      [
+        '$.device.name: value differs (legacy: "A", new: "B")',
+        '$.items[1]: missing in new (legacy: 2)',
+      ].join('\n'),
+    );
+  });
+
+  it('renders a subset-strategy path difference with legacy / new', () => {
+    const result = compare({
+      strategy: 'subset',
+      rules,
+      legacy: resp(200, { id: 1 }),
+      candidate: resp(200, { id: 2 }),
+      requireMatchingPaths: ['$.id'],
+    });
+    expect(result.diffText).toBe('$.id: value differs (legacy: 1, new: 2)');
+  });
+
+  it('renders a custom comparator with legacy / new when a legacy response exists', () => {
+    const result = compare({
+      strategy: 'custom',
+      rules,
+      legacy: resp(200, {}),
+      candidate: resp(200, {}),
+      comparator: () => [
+        { path: '$.total', kind: 'custom', expected: 10, actual: 11, message: 'total drifted' },
+      ],
+    });
+    expect(result.diffText).toBe('$.total: total drifted (legacy: 10, new: 11)');
+  });
+});
+
+describe('diffText vocabulary — expectation-sourced results say expected / actual', () => {
+  const rules = defaultComparisonRules();
+
+  it('renders an expected status with expected / actual, never legacy', () => {
+    const result = compare({
+      strategy: 'explicit_expectations',
+      rules,
+      candidate: resp(200, {}),
+      expect: { status: 404 },
+    });
+    expect(result.diffText).toBe(
+      '$.status: status differs from expectation (expected: 404, actual: 200)',
+    );
+    expect(result.diffText).not.toContain('legacy');
+  });
+
+  it('renders an asserted path the response never carried as missing (expected: …)', () => {
+    const result = compare({
+      strategy: 'explicit_expectations',
+      rules,
+      candidate: resp(200, {}),
+      expect: { body: { json_paths: { '$.error.code': 'USER_NOT_FOUND' } } },
+    });
+    expect(result.diffText).toBe('$.error.code: missing (expected: "USER_NOT_FOUND")');
+    expect(result.diffText).not.toContain('legacy');
+    expect(result.diffText).not.toContain(' in new');
+  });
+
+  it('renders a key the asserted literal did not name as unexpected (actual: …)', () => {
+    const result = compare({
+      strategy: 'explicit_expectations',
+      rules,
+      candidate: resp(200, { error: { code: 'A', detail: 'extra' } }),
+      expect: { body: { json_paths: { '$.error': { code: 'A' } } } },
+    });
+    expect(result.diffText).toBe('$.error.detail: unexpected (actual: "extra")');
+    expect(result.diffText).not.toContain('legacy');
+    expect(result.diffText).not.toContain(' in new');
+  });
+
+  it('renders a wrong asserted value with expected / actual', () => {
+    const result = compare({
+      strategy: 'explicit_expectations',
+      rules,
+      candidate: resp(200, { error: { code: 'OTHER' } }),
+      expect: { body: { json_paths: { '$.error.code': 'USER_NOT_FOUND' } } },
+    });
+    expect(result.diffText).toBe(
+      '$.error.code: value differs (expected: "USER_NOT_FOUND", actual: "OTHER")',
+    );
+    expect(result.diffText).not.toContain('legacy');
+  });
+
+  it('renders a custom comparator with expected / actual when there is no legacy response', () => {
+    // `new_only_assert` is the only mode that reaches `compare()` without a
+    // legacy response, and `custom` is the only non-expectation strategy it
+    // permits — so the absent legacy side is the signal, not the mode.
+    const result = compare({
+      strategy: 'custom',
+      rules,
+      candidate: resp(200, {}),
+      comparator: () => [
+        { path: '$.total', kind: 'custom', expected: 10, actual: 11, message: 'total drifted' },
+      ],
+    });
+    expect(result.diffText).toBe('$.total: total drifted (expected: 10, actual: 11)');
+    expect(result.diffText).not.toContain('legacy');
+  });
+
+  it('applies the expectation vocabulary to a comparator returning a full result too', () => {
+    const result = compare({
+      strategy: 'custom',
+      rules,
+      candidate: resp(200, {}),
+      comparator: () => ({
+        pass: false,
+        summary: 'custom',
+        mismatches: [
+          { path: '$.total', kind: 'custom', expected: 10, actual: 11, message: 'total drifted' },
+        ],
+      }),
+    });
+    expect(result.diffText).toBe('$.total: total drifted (expected: 10, actual: 11)');
+  });
+});

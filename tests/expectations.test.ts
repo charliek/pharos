@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compare, type ExpectSpec } from '../src/comparison/compare';
+import { PRESENT } from '../src/comparison/headers';
 import { REDACTED } from '../src/comparison/redaction';
 import { neutralMismatchKinds } from '../src/comparison/result';
 import { defaultComparisonRules } from '../src/comparison/rules';
@@ -295,6 +296,55 @@ describe('expect.location', () => {
     expect(rendered).not.toContain('expected-hint-value');
     expect(rendered).not.toContain('actual-hint-value');
     expect(rendered).toContain(REDACTED);
+  });
+});
+
+describe('expectation diffText vocabulary', () => {
+  it('renders a header expectation with expected / actual, never legacy / new', () => {
+    const result = assertExpect(
+      { headers: { 'X-Frame-Options': 'DENY' } },
+      response({ 'x-frame-options': 'SAMEORIGIN' }),
+    );
+    expect(result.diffText).toBe(
+      `headers.x-frame-options: header 'x-frame-options' differs from expectation (expected: "DENY", actual: "SAMEORIGIN")`,
+    );
+    expect(result.diffText).not.toContain('legacy');
+  });
+
+  it('renders an absent-header assertion with the actual value only', () => {
+    const result = assertExpect(
+      { header_absent: ['X-Forwarded-Host'] },
+      response({ 'x-forwarded-host': 'legacy.example' }),
+    );
+    // The header's *value* here happens to name the legacy host; what must never
+    // appear is a `legacy:` / `new:` side label.
+    expect(result.diffText).toBe(
+      `headers.x-forwarded-host: header 'x-forwarded-host' must be absent (expected: ∅, actual: "legacy.example")`,
+    );
+    expect(result.diffText).not.toContain('legacy:');
+    expect(result.diffText).not.toContain('new:');
+  });
+
+  it('renders an expected cookie that was never set with expected / actual', () => {
+    const result = assertExpect(
+      { set_cookie: [{ name: 'refresh' }] },
+      response({}, ['session=abc123; Path=/']),
+    );
+    expect(result.diffText).toBe(
+      `set_cookie.refresh: expected cookie 'refresh' was not set (expected: "${PRESENT}", actual: ∅)`,
+    );
+    expect(result.diffText).not.toContain('legacy');
+  });
+
+  it('renders a Location expectation with expected / actual', () => {
+    const result = assertExpect(
+      { location: { path: '/login' } },
+      response({ location: '/other' }, [], 303),
+    );
+    expect(result.diffText).toBe(
+      'location.path: Location path differs from expectation (expected: "/login", actual: "/other")',
+    );
+    expect(result.diffText).not.toContain('legacy');
   });
 });
 
