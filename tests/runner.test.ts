@@ -502,11 +502,18 @@ steps:
 });
 
 describe('runScenario — replay_against_recording', () => {
-  function writeFixture(name: string, body: unknown): void {
+  // Defaults match the 'rep.user' / 'get' scenario+step below, so a call site
+  // only needs to override ids when it deliberately wants a mismatch (spec
+  // Section 10.3's replay identity cross-check).
+  function writeFixture(
+    name: string,
+    body: unknown,
+    ids: { scenarioId: string; stepId: string } = { scenarioId: 'rep.user', stepId: 'get' },
+  ): void {
     const recording: Recording = {
       version: 1,
-      scenarioId: 'seed',
-      stepId: 'get',
+      scenarioId: ids.scenarioId,
+      stepId: ids.stepId,
       recordedAt: '2024-01-01T00:00:00.000Z',
       request: { method: 'GET', path: '/users/1' },
       response: {
@@ -521,7 +528,11 @@ describe('runScenario — replay_against_recording', () => {
   }
 
   it('replays a recording against the new service and passes on parity', async () => {
-    writeFixture('users/replay.json', { id: 1, name: 'A' });
+    writeFixture(
+      'users/replay.json',
+      { id: 1, name: 'A' },
+      { scenarioId: 'rep.user', stepId: 'get' },
+    );
     newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1, name: 'A' }));
     const scenario = loadScenarioFromText(
       `version: 1
@@ -544,7 +555,11 @@ steps:
   });
 
   it('fails when the new response diverges from the recording', async () => {
-    writeFixture('users/mismatch.json', { id: 1, name: 'A' });
+    writeFixture(
+      'users/mismatch.json',
+      { id: 1, name: 'A' },
+      { scenarioId: 'rep.mismatch', stepId: 'get' },
+    );
     newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1, name: 'B' }));
     const scenario = loadScenarioFromText(
       `version: 1
@@ -572,7 +587,7 @@ steps:
     // target legacy actually named when the *recorded* path is the base.
     writeRecording(reportDir, 'users/location.json', {
       version: 1,
-      scenarioId: 'seed',
+      scenarioId: 'rep.location',
       stepId: 'get',
       recordedAt: '2024-01-01T00:00:00.000Z',
       request: { method: 'GET', path: '/recorded/deep/users/1' },
@@ -643,6 +658,122 @@ steps:
     const result = await runScenario(scenario, 'test.yaml', config(), registry);
     expect(result.pass).toBe(false);
     expect(result.steps[0].error).toMatch(/not found/);
+  });
+
+  it('fails when the recording was captured for a different scenario (spec §10.3)', async () => {
+    writeFixture(
+      'users/wrong-scenario.json',
+      { id: 1, name: 'A' },
+      { scenarioId: 'some.other.scenario', stepId: 'get' },
+    );
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1, name: 'A' }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rep.wrong-scenario
+name: rep
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: get
+    recording: { fixture: users/wrong-scenario.json }
+    request: { method: GET, path: /users/1 }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(false);
+    expect(result.steps[0].error).toContain("expected scenario 'rep.wrong-scenario' step 'get'");
+    expect(result.steps[0].error).toContain(
+      "recording was captured for scenario 'some.other.scenario' step 'get'",
+    );
+  });
+
+  it('fails when the recording was captured for a different step (spec §10.3)', async () => {
+    writeFixture(
+      'users/wrong-step.json',
+      { id: 1, name: 'A' },
+      { scenarioId: 'rep.wrong-step', stepId: 'some-other-step' },
+    );
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1, name: 'A' }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: rep.wrong-step
+name: rep
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: get
+    recording: { fixture: users/wrong-step.json }
+    request: { method: GET, path: /users/1 }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.pass).toBe(false);
+    expect(result.steps[0].error).toContain("expected scenario 'rep.wrong-step' step 'get'");
+    expect(result.steps[0].error).toContain(
+      "recording was captured for scenario 'rep.wrong-step' step 'some-other-step'",
+    );
+  });
+
+  it('fails on both sides when two fixtures are swapped between steps (spec §10.3)', async () => {
+    // swap-a.json was actually recorded for step-b, and swap-b.json for step-a —
+    // a genuine swap, as if the two fixture files had been renamed past each
+    // other. Each step points at its own (wrong) file by the authored path;
+    // only the stamped identity reveals the swap.
+    writeFixture('users/swap-a.json', { id: 1 }, { scenarioId: 'rep.swap', stepId: 'step-b' });
+    writeFixture('users/swap-b.json', { id: 2 }, { scenarioId: 'rep.swap', stepId: 'step-a' });
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 1 }));
+
+    const scenarioA = loadScenarioFromText(
+      `version: 1
+id: rep.swap
+name: rep
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: step-a
+    recording: { fixture: users/swap-a.json }
+    request: { method: GET, path: /users/1 }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+    const scenarioB = loadScenarioFromText(
+      `version: 1
+id: rep.swap
+name: rep
+service: s
+tags: [regression]
+mode: replay_against_recording
+steps:
+  - id: step-b
+    recording: { fixture: users/swap-b.json }
+    request: { method: GET, path: /users/1 }
+    compare: { strategy: json_semantic, status: same }
+`,
+      'test.yaml',
+    );
+
+    const resultA = await runScenario(scenarioA, 'test.yaml', config(), registry);
+    const resultB = await runScenario(scenarioB, 'test.yaml', config(), registry);
+
+    expect(resultA.pass).toBe(false);
+    expect(resultA.steps[0].error).toContain("expected scenario 'rep.swap' step 'step-a'");
+    expect(resultA.steps[0].error).toContain(
+      "recording was captured for scenario 'rep.swap' step 'step-b'",
+    );
+
+    expect(resultB.pass).toBe(false);
+    expect(resultB.steps[0].error).toContain("expected scenario 'rep.swap' step 'step-b'");
+    expect(resultB.steps[0].error).toContain(
+      "recording was captured for scenario 'rep.swap' step 'step-a'",
+    );
   });
 });
 

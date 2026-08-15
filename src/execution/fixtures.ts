@@ -215,6 +215,34 @@ export function loadRecording(fixtureDir: string, fixturePath: string): Recordin
 }
 
 /**
+ * Verify a loaded recording was captured for the scenario/step now replaying it
+ * (spec Section 10.3). `scenarioId`/`stepId` are stamped into the fixture at
+ * record time (Section 10.1) but `loadRecording` only validates shape — nothing
+ * otherwise stops a step from pointing at a fixture recorded for a different
+ * scenario or step (wrong path typed, a scenario renamed after recording, two
+ * fixtures swapped between steps). That's undetectable at replay without this
+ * check and silently compares against the wrong oracle, so it fails closed: no
+ * escape hatch. Re-record under the correct scenario/step instead.
+ */
+export function assertRecordingIdentity(
+  recording: Recording,
+  fixturePath: string,
+  scenarioId: string,
+  stepId: string,
+): void {
+  if (recording.scenarioId === scenarioId && recording.stepId === stepId) return;
+  throw new ValidationError(fixturePath, [
+    {
+      path: '(fixture)',
+      message:
+        `recording identity mismatch for '${fixturePath}': ` +
+        `expected scenario '${scenarioId}' step '${stepId}', ` +
+        `recording was captured for scenario '${recording.scenarioId}' step '${recording.stepId}'`,
+    },
+  ]);
+}
+
+/**
  * The recorded legacy response, as an HttpResponseRecord for comparison. Maps
  * the on-disk optional `set_cookie` back to the required in-memory `setCookie`;
  * a recording without it replays with no cookie data (spec Section 10.1).

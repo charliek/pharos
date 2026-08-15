@@ -465,6 +465,12 @@ cleanup:
 
 ### 4.10 Recording and replay specs
 
+The two scenarios below share `id: users.record-existing-user` and `stepId:
+get-user` deliberately: the replay identity cross-check (Section 10.3) requires
+a fixture's stamped `scenarioId`/`stepId` to match the scenario/step now
+replaying it, so recording and replay are the same scenario with its `mode`
+flipped after the fixture is captured, not two independently-named files.
+
 **Recording mode:**
 
 ```yaml
@@ -489,7 +495,7 @@ steps:
 
 ```yaml
 version: 1
-id: users.replay-existing-user
+id: users.record-existing-user
 name: Replay existing user behavior against new service
 service: user-service
 tags: [read, regression]
@@ -967,7 +973,7 @@ The recorded **request** is informational — replay re-sends the scenario's fre
 
 ### 10.3 Replay behavior
 
-Replay loads the recording, applies allowed variable substitutions to recorded request paths/bodies, executes the new request, normalizes both responses, and compares. A missing or invalid fixture fails clearly.
+Replay loads the recording, applies allowed variable substitutions to recorded request paths/bodies, executes the new request, normalizes both responses, and compares. A missing or invalid fixture fails clearly. So does a recording whose `scenarioId`/`stepId` don't match the scenario/step now replaying it — a step execution failure naming the fixture path, the expected (running) ids, and the actual (recorded) ids. No escape hatch: re-record under the correct scenario/step.
 
 **Relative `Location` in a recorded response** resolves against the **recorded** request's path (joined to `legacy_base_url`), never the live step's — the recorded response is the answer to the recorded request, and a parameterized replay may send a different path entirely. With no `legacy_base_url` configured (replay does not require one), or a recorded path that does not resolve against it, there is no base and the `location` comparison takes its exact-string fallback (Section 8.6).
 

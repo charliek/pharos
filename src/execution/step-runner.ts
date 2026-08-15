@@ -19,6 +19,7 @@ import { writeFailureArtifacts } from '../reporting/artifacts';
 import type { Scenario, ScenarioStep } from '../scenarios/schema';
 import type { CookieJar } from './cookies';
 import {
+  assertRecordingIdentity,
   buildRecording,
   loadRecording,
   type Recording,
@@ -443,6 +444,7 @@ async function executeStep(
     let recording: Recording;
     try {
       recording = loadRecording(config.fixture_dir, step.recording.fixture);
+      assertRecordingIdentity(recording, step.recording.fixture, scenario.id, step.id);
       legacy = recordingResponse(recording);
     } catch (error) {
       const detail = error instanceof ValidationError ? error.issues[0]?.message : messageOf(error);

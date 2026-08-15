@@ -55,7 +55,11 @@ Both the recorded response and the live new response are normalized by the same
 contract, then compared. The scenario's request is sent (freshly
 variable-substituted, so it carries current auth) — the recorded request is
 redacted and so is not replayed; the recording is the response oracle. A missing
-or invalid fixture fails clearly.
+or invalid fixture fails clearly — and so does a fixture whose stamped
+`scenarioId`/`stepId` don't match the scenario/step now replaying it, naming the
+fixture path and both the expected and recorded ids. There's no escape hatch:
+a fixture recorded under one scenario or step can't be pointed at another,
+re-record it under the correct one instead.
 
 ## Recording format
 
