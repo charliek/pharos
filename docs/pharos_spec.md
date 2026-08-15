@@ -396,7 +396,7 @@ compare:
 `expect` fields are all optional and independently assertable:
 
 - `status` — exact status code.
-- `headers` — exact match on named single-value headers (case-insensitive names), read from the response's `headers` map. Naming `set-cookie` or `cookie` in `headers`, `header_absent`, or `header_present` is a **load-time validation error** — cookie assertions read the lossy single-value map otherwise, exactly the drift Section 9.2 exists to prevent; use `set_cookie` / `set_cookie_absent` instead. This mirrors the `compare_headers` conflict rule in Section 8.6.
+- `headers` — exact match on named single-value headers (case-insensitive names), read from the response's `headers` map. Naming `set-cookie` or `cookie` in `headers`, `header_absent`, or `header_present` is a **load-time validation error** — cookie assertions read the lossy single-value map otherwise, exactly the drift Section 9.2 exists to prevent; use `set_cookie` / `set_cookie_absent` instead. This is the same rule `compare_headers` enforces for `set-cookie` in Section 8.6.
 - `header_absent` — header names that must **not** be present on the response. Same `set-cookie`/`cookie` restriction as `headers`, above.
 - `header_present` — header names that must be present on the response with **any** non-empty value — the value itself is not asserted, only that it exists and is non-empty. For a header whose value is inherently dynamic (e.g. `Retry-After`, a countdown) this is the only assertion that makes sense. Same `set-cookie`/`cookie` restriction as `headers` and `header_absent`, above. A missing header, or one present with an empty value, is a mismatch of kind `header` — the same kind `headers` uses.
 - `body.json_paths` — exact value at each JSONPath (Section 8.4 subset).
@@ -815,7 +815,10 @@ Applies to console logs, JSON reports, JUnit reports, failure artifacts, and rec
 
 ### 8.6 Set-Cookie and Location comparison
 
-Two additional, **optional** comparison dimensions, read from `HttpResponseRecord.setCookie` (Section 9.2) and the `location` response header — not from the single-value `headers` map that `compare_headers` uses. These are new dimensions layered onto the engine, not an extension of `compare_headers`: **listing `set-cookie` or `location` in `compare_headers` while the corresponding block is present is a load-time validation error** (the block wins conceptually; the error keeps intent unambiguous).
+Two additional, **optional** comparison dimensions, read from `HttpResponseRecord.setCookie` (Section 9.2) and the `location` response header — not from the single-value `headers` map that `compare_headers` uses. These are new dimensions layered onto the engine, not an extension of `compare_headers`, and the two are **asymmetric** about it:
+
+- **Listing `set-cookie` in `compare_headers` is always a load-time validation error**, block or no block. The generic header path compares one value per name, so a multi-cookie response silently loses all but the last — comparing cookies that way is never right, and the `set_cookie` block is the only correct tool.
+- **Listing `location` in `compare_headers` is a load-time validation error only while a `location` block is present** (the block wins conceptually; the error keeps intent unambiguous). `Location` is genuinely single-valued, so the generic path compares it faithfully and listing it on its own stays legal.
 
 ```yaml
 # both blocks optional; omitted = today's behavior (not compared)
@@ -1148,7 +1151,7 @@ Plus an example scenario demonstrating **ignored dynamic response fields** (may 
 
 **`compare_live`:** calls both services; compares per strategy; per-step pass/fail; failure artifacts written.
 
-**Set-Cookie/Location comparison:** `set_cookie`/`location` contract blocks (Section 8.6) parse, merge (list fields concatenate-then-dedup, Section 5.4), and compare per their documented semantics; listing `set-cookie`/`location` in `compare_headers` while the block is present is a load-time validation error; a dedicated test proves no raw cookie value renders in a `set_cookie` mismatch; both `milliseconds` and `millis` timestamp-precision spellings are accepted.
+**Set-Cookie/Location comparison:** `set_cookie`/`location` contract blocks (Section 8.6) parse, merge (list fields concatenate-then-dedup, Section 5.4), and compare per their documented semantics; listing `set-cookie` in `compare_headers` is a load-time validation error on its own, and listing `location` is one while a `location` block is present; a dedicated test proves no raw cookie value renders in a `set_cookie` mismatch; both `milliseconds` and `millis` timestamp-precision spellings are accepted.
 
 **Expectation vocabulary:** `explicit_expectations`/`new_only_assert` `expect` supports `headers`, `header_absent`, `set_cookie` (name/value/value_present/attributes/exact_attributes), and `location` (path/query/query_present/query_absent), reusing the Section 8.6 parsers.
 
@@ -1182,7 +1185,7 @@ These validate the framework itself.
 
 **Comparison:** exact match passes; status mismatch fails; selected header mismatch fails; key-order difference passes semantically; ignored path not compared; array sort by ID works; unordered arrays compare as sets; missing field reported with path; extra field reported when not ignored; redacted fields absent from diff output.
 
-**Set-Cookie/Location comparison and expectations:** `set_cookie`/`location` contract blocks compare per Section 8.6 (name pairing, positional pairing within duplicate-name groups, attribute case-insensitivity, `ignore_cookies`/`ignore_attributes`/`ignore_query_params`, `compare_values`/`origin` variants); an unparseable value falls back to exact-string compare; `compare_headers` conflicting with a present block is a load-time error; a dedicated test proves a `set_cookie` mismatch never renders a raw cookie value; `expect.headers`/`header_absent`/`set_cookie`/`location` assert correctly against a single response; both `milliseconds` and `millis` are accepted for timestamp precision; a duplicate list entry across defaults and a route resolves to one entry after merge.
+**Set-Cookie/Location comparison and expectations:** `set_cookie`/`location` contract blocks compare per Section 8.6 (name pairing, positional pairing within duplicate-name groups, attribute case-insensitivity, `ignore_cookies`/`ignore_attributes`/`ignore_query_params`, `compare_values`/`origin` variants); an unparseable value falls back to exact-string compare; `compare_headers` listing `set-cookie` is a load-time error with or without a block, and listing `location` is one only alongside a `location` block; a dedicated test proves a `set_cookie` mismatch never renders a raw cookie value; `expect.headers`/`header_absent`/`set_cookie`/`location` assert correctly against a single response; both `milliseconds` and `millis` are accepted for timestamp precision; a duplicate list entry across defaults and a route resolves to one entry after merge.
 
 **Contract:** valid contract loads; reference resolves; merge correct; contract+inline conflict rejected; `check-contract` flags out-of-subset paths.
 

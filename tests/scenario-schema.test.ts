@@ -496,6 +496,18 @@ describe('inline set_cookie / location blocks (spec §8.6)', () => {
     ]);
   });
 
+  it('rejects compare_headers naming set-cookie even with no block', () => {
+    // Unconditional: the generic header path compares a single value and drops
+    // the rest of a multi-cookie response, so the entry is never right.
+    const found = issuesOf(withCompare('headers: { compare: [content-type, Set-Cookie] }'));
+    expect(found.map((issue) => issue.path)).toEqual(['steps[0].compare.headers.compare']);
+    expect(found[0].message).toMatch(/use a 'set_cookie' block instead/);
+  });
+
+  it('allows compare_headers naming location when no location block is present', () => {
+    expect(paths(withCompare('headers: { compare: [location] }'))).toEqual([]);
+  });
+
   it('counts a dimension block as inline behavioral rules (contract exclusion)', () => {
     const withContract = withCompare('set_cookie: {}').replace(
       'mode: compare_live\n',

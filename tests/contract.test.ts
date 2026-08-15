@@ -280,7 +280,7 @@ routes:
   });
 });
 
-describe('compare_headers conflict with a dimension block (spec §8.6)', () => {
+describe('compare_headers usurping a dimension (spec §8.6)', () => {
   function issues(yaml: string) {
     try {
       loadContractFromText(yaml, 'c.yaml');
@@ -325,15 +325,48 @@ routes:
     expect(found[0].path).toBe('defaults.compare_headers');
   });
 
-  it('allows the header when no dimension block is present', () => {
-    expect(
-      issues(`version: 1
+  it('rejects a route listing set-cookie with no block anywhere', () => {
+    // The generic header path would compare a single value and drop the rest of
+    // a multi-cookie response, so the entry is a config bug on its own.
+    const found = issues(`version: 1
 service: s
 routes:
   - id: r
     match: { methods: [GET], path_template: /r }
     comparison:
-      compare_headers: ["location", "set-cookie"]
+      compare_headers: ["location", "Set-Cookie"]
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0].path).toBe('routes[0].comparison.compare_headers');
+    expect(found[0].message).toMatch(/use a 'set_cookie' block instead/);
+  });
+
+  it('rejects set-cookie listed in defaults with no block anywhere', () => {
+    const found = issues(`version: 1
+service: s
+defaults:
+  compare_headers: ["set-cookie"]
+routes:
+  - id: a
+    match: { methods: [GET], path_template: /a }
+  - id: b
+    match: { methods: [GET], path_template: /b }
+`);
+    expect(found).toHaveLength(1);
+    expect(found[0].path).toBe('defaults.compare_headers');
+    expect(found[0].message).toMatch(/multi-cookie response/);
+  });
+
+  it('allows location when no location block is present', () => {
+    // A genuine single-value header: the generic path compares it faithfully.
+    expect(
+      issues(`version: 1
+service: s
+defaults:
+  compare_headers: ["Location"]
+routes:
+  - id: r
+    match: { methods: [GET], path_template: /r }
 `),
     ).toEqual([]);
   });

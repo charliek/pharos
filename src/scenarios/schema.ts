@@ -266,8 +266,9 @@ const compareSchema = z
   })
   .strict()
   .superRefine((compare, ctx) => {
+    // `set-cookie` is rejected on its own (the generic header path is lossy);
+    // `location` only when its block is declared beside it (spec Section 8.6).
     for (const name of dimensionHeaderConflicts(compare.headers?.compare, {
-      set_cookie: Boolean(compare.set_cookie),
       location: Boolean(compare.location),
     })) {
       ctx.addIssue({
