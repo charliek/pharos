@@ -19,6 +19,39 @@ export type HttpMethod = (typeof HTTP_METHODS)[number];
 /** Methods that must not carry a body — an HTTP/`fetch` quirk, not a Pharos rule (Section 9.1). */
 export const BODYLESS_METHODS: ReadonlySet<HttpMethod> = new Set<HttpMethod>(['OPTIONS', 'HEAD']);
 
+/** The media type `request.form` implies and urlencodes to (spec Section 9.6). */
+export const FORM_MEDIA_TYPE = 'application/x-www-form-urlencoded';
+
+/** The media type portion of a `content-type` value — before any `;`, trimmed, lowercased. */
+function mediaTypeOf(contentTypeValue: string): string {
+  return contentTypeValue.split(';', 1)[0].trim().toLowerCase();
+}
+
+/**
+ * Find the explicit `content-type` header (case-insensitive name) among a
+ * request's headers whose media type conflicts with what `request.form`
+ * implies. When a record carries more than one casing variant of the name
+ * (e.g. both `Content-Type` and `content-type` — legal in a plain object,
+ * since the keys differ), the LAST one in iteration order is evaluated: that
+ * mirrors `buildHeaders`, which applies per-request headers with `.set()` in
+ * `Object.entries` order, so the last matching entry is the one that actually
+ * ships. Parameters (`; charset=utf-8`) are ignored — only the media type
+ * itself must match `FORM_MEDIA_TYPE`. Shared by the schema's superRefine and
+ * the client's defensive check so the rule cannot drift (spec Section 9.6).
+ */
+export function conflictingFormContentType(
+  headers: Record<string, string> | undefined,
+): { headerName: string; headerValue: string } | undefined {
+  if (!headers) return undefined;
+  let last: { headerName: string; headerValue: string } | undefined;
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== 'content-type') continue;
+    last = { headerName: name, headerValue: value };
+  }
+  if (!last || mediaTypeOf(last.headerValue) === FORM_MEDIA_TYPE) return undefined;
+  return last;
+}
+
 /**
  * A fully-resolved request. Template variables (spec Section 7.1) are already
  * substituted into `path`, `query`, `headers`, `body`, and `form` by the runner
@@ -159,6 +192,23 @@ function assertRequestShape(spec: HttpRequestSpec): void {
 }
 
 /**
+ * Refuse a `form` request whose EFFECTIVE content-type conflicts with what
+ * `form` implies. Must run on the merged `Headers` produced by `buildHeaders`,
+ * not `spec.headers` alone: `options.defaultHeaders` (e.g. a configured
+ * `content-type: application/json`) can set the wire content-type without
+ * ever appearing on the request spec, and per-request headers still take
+ * precedence over it — exactly `buildHeaders`' merge order (spec Section 9.6).
+ */
+function assertFormContentType(form: HttpRequestSpec['form'], headers: Headers): void {
+  if (form === undefined) return;
+  const contentType = headers.get('content-type');
+  if (contentType === null || mediaTypeOf(contentType) === FORM_MEDIA_TYPE) return;
+  throw new RequestShapeError(
+    `request.form implies content-type '${FORM_MEDIA_TYPE}', but the effective content-type is '${contentType}' — remove or correct the request header (or defaultHeaders) so it matches (spec Section 9.6)`,
+  );
+}
+
+/**
  * Serialize the request body — urlencoded for `form`, JSON for objects, verbatim
  * for strings — defaulting the content-type only when the caller did not set one.
  */
@@ -221,6 +271,7 @@ export async function sendRequest(
     assertRequestShape(spec);
     url = buildUrl(options.baseUrl, spec.path, spec.query);
     const headers = buildHeaders(options.defaultHeaders, spec.headers);
+    assertFormContentType(spec.form, headers);
     const init: RequestInit = {
       method: spec.method,
       headers,

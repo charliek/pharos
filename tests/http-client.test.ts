@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildUrl, sendRequest } from '../src/execution/http-client';
+import { buildUrl, FORM_MEDIA_TYPE, sendRequest } from '../src/execution/http-client';
 import { replyJson, startTestServer, type TestServer } from './helpers/server';
 
 let server: TestServer | undefined;
@@ -222,6 +222,143 @@ describe('sendRequest', () => {
     expect(server.requests[0].headers['content-type']).toBe(
       'application/x-www-form-urlencoded; charset=utf-8',
     );
+  });
+
+  it('refuses a form body with a contradictory explicit content-type (never throws)', async () => {
+    const record = await sendRequest(
+      { baseUrl: 'http://127.0.0.1:1' },
+      {
+        method: 'POST',
+        path: '/t',
+        form: { a: '1' },
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+    expect(record.status).toBe(0);
+    expect(record.error?.type).toBe('request');
+    expect(record.error?.message).toMatch(/form/);
+    expect(record.error?.message).toContain('application/json');
+  });
+
+  it('refuses a form body with a contradictory content-type under a mixed-case header name', async () => {
+    const record = await sendRequest(
+      { baseUrl: 'http://127.0.0.1:1' },
+      {
+        method: 'POST',
+        path: '/t',
+        form: { a: '1' },
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+    expect(record.status).toBe(0);
+    expect(record.error?.type).toBe('request');
+  });
+
+  it('refuses a form body with a parameterized contradictory content-type', async () => {
+    const record = await sendRequest(
+      { baseUrl: 'http://127.0.0.1:1' },
+      {
+        method: 'POST',
+        path: '/t',
+        form: { a: '1' },
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      },
+    );
+    expect(record.status).toBe(0);
+    expect(record.error?.type).toBe('request');
+  });
+
+  it('tolerates whitespace around the media type in a compatible form content-type', async () => {
+    // Space before the `;` is internal to the header value (not leading/trailing
+    // on the whole value), so `fetch`'s Headers normalization won't strip it —
+    // this exercises the media-type extraction's own trim, not Headers'.
+    server = await startTestServer((_req, res) => replyJson(res, 200, {}));
+    const record = await sendRequest(
+      { baseUrl: server.url },
+      {
+        method: 'POST',
+        path: '/t',
+        form: { a: '1' },
+        headers: { 'content-type': 'application/x-www-form-urlencoded ; charset=utf-8' },
+      },
+    );
+    expect(record.error).toBeUndefined();
+    expect(server.requests[0].headers['content-type']).toBe(
+      'application/x-www-form-urlencoded ; charset=utf-8',
+    );
+  });
+
+  it('judges a duplicate-cased content-type by the LAST entry — the one that ships on the wire', async () => {
+    // Object.entries preserves insertion order; buildHeaders applies per-request
+    // headers with `.set()` in that order, so the second entry here overwrites
+    // the first on the wire. The check must agree, not flag the first (compatible-
+    // overridden) or miss a later conflict.
+    server = await startTestServer((_req, res) => replyJson(res, 200, {}));
+    const accepted = await sendRequest(
+      { baseUrl: server.url },
+      {
+        method: 'POST',
+        path: '/t',
+        form: { a: '1' },
+        headers: {
+          'Content-Type': 'application/json',
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+      },
+    );
+    expect(accepted.error).toBeUndefined();
+    expect(server.requests[0].headers['content-type']).toBe(FORM_MEDIA_TYPE);
+
+    const rejected = await sendRequest(
+      { baseUrl: 'http://127.0.0.1:1' },
+      {
+        method: 'POST',
+        path: '/t',
+        form: { a: '1' },
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'Content-Type': 'application/json',
+        },
+      },
+    );
+    expect(rejected.status).toBe(0);
+    expect(rejected.error?.type).toBe('request');
+    expect(rejected.error?.message).toContain('application/json');
+  });
+
+  it('catches a conflicting content-type that arrives only via defaultHeaders', async () => {
+    const record = await sendRequest(
+      { baseUrl: 'http://127.0.0.1:1', defaultHeaders: { 'content-type': 'application/json' } },
+      { method: 'POST', path: '/t', form: { a: '1' } },
+    );
+    expect(record.status).toBe(0);
+    expect(record.error?.type).toBe('request');
+    expect(record.error?.message).toContain('application/json');
+  });
+
+  it('accepts a form request when defaultHeaders already carries the compatible form content-type', async () => {
+    server = await startTestServer((_req, res) => replyJson(res, 200, {}));
+    const record = await sendRequest(
+      { baseUrl: server.url, defaultHeaders: { 'content-type': FORM_MEDIA_TYPE } },
+      { method: 'POST', path: '/t', form: { a: '1' } },
+    );
+    expect(record.error).toBeUndefined();
+    expect(server.requests[0].headers['content-type']).toBe(FORM_MEDIA_TYPE);
+  });
+
+  it('lets a per-request content-type override a conflicting defaultHeaders content-type', async () => {
+    server = await startTestServer((_req, res) => replyJson(res, 200, {}));
+    const record = await sendRequest(
+      { baseUrl: server.url, defaultHeaders: { 'content-type': 'application/json' } },
+      {
+        method: 'POST',
+        path: '/t',
+        form: { a: '1' },
+        headers: { 'content-type': FORM_MEDIA_TYPE },
+      },
+    );
+    expect(record.error).toBeUndefined();
+    expect(server.requests[0].headers['content-type']).toBe(FORM_MEDIA_TYPE);
   });
 
   it('sends an OPTIONS preflight and captures the CORS response', async () => {

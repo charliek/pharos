@@ -24,6 +24,20 @@ export interface VariableContext {
 
 const WHOLE_TEMPLATE = /^\s*\{\{\s*(.+?)\s*\}\}\s*$/;
 const EMBEDDED_TEMPLATE = /\{\{\s*(.+?)\s*\}\}/g;
+// Non-global twin of EMBEDDED_TEMPLATE, used only to test for a template's
+// presence — a global regex's `.test()` carries `lastIndex` state across
+// calls, which is a footgun for a detector meant to be called repeatedly.
+const TEMPLATE_PRESENT = /\{\{\s*(.+?)\s*\}\}/;
+
+/**
+ * True when `text` contains `{{ ... }}` template syntax (spec Section 7.1).
+ * For validators that run before substitution (e.g. the scenario schema) and
+ * cannot resolve a templated value — they defer the check it would otherwise
+ * run to whatever inspects the value after `resolveRequest` substitutes it.
+ */
+export function containsTemplate(text: string): boolean {
+  return TEMPLATE_PRESENT.test(text);
+}
 
 function lookupVariable(variables: Record<string, unknown>, path: string, expr: string): unknown {
   if (path === '') {

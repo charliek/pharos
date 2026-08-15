@@ -9,7 +9,14 @@ import {
   locationBlockSchema,
   setCookieBlockSchema,
 } from '../comparison/rules';
-import { BODYLESS_METHODS, HTTP_METHODS, type HttpMethod } from '../execution/http-client';
+import {
+  BODYLESS_METHODS,
+  conflictingFormContentType,
+  FORM_MEDIA_TYPE,
+  HTTP_METHODS,
+  type HttpMethod,
+} from '../execution/http-client';
+import { containsTemplate } from '../execution/variables';
 
 /**
  * Request methods a scenario may issue (spec Sections 4.6 and 9.1) — the client's
@@ -123,6 +130,24 @@ const requestSchema = z
             message: `method GET must not set request.${field} (a GET ${field} has no meaning)`,
           });
         }
+      }
+    }
+    // `request.form` always urlencodes and implies FORM_MEDIA_TYPE; an explicit
+    // content-type header naming a different media type would ship a body
+    // labeled as something it isn't, silently. Parameters (`; charset=utf-8`)
+    // are fine — only the media type itself must match (spec Section 9.6).
+    // This runs before the runner's variable substitution (spec Section 7.1),
+    // so a templated value (`{{ variables.ct }}`) cannot be judged yet — skip
+    // it here and let the client's post-substitution check (which sees the
+    // resolved value) be the enforcement point for that case.
+    if (request.form !== undefined) {
+      const conflict = conflictingFormContentType(request.headers);
+      if (conflict && !containsTemplate(conflict.headerValue)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['headers', conflict.headerName],
+          message: `request.form implies content-type '${FORM_MEDIA_TYPE}', but request.headers.${conflict.headerName} sets '${conflict.headerValue}' — remove the header or correct it to match (spec Section 9.6)`,
+        });
       }
     }
   });

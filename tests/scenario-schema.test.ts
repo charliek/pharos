@@ -285,6 +285,90 @@ steps:
     expect(paths(yaml)).toEqual([]);
   });
 
+  it('rejects a form body combined with a contradictory explicit content-type', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: application/json }',
+    );
+    expect(paths(yaml)).toContain('steps[0].request.headers.content-type');
+  });
+
+  it('rejects a form body combined with a contradictory content-type under a mixed-case header name', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { Content-Type: application/json }',
+    );
+    expect(paths(yaml)).toContain('steps[0].request.headers.Content-Type');
+  });
+
+  it('rejects a form body combined with a parameterized contradictory content-type', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "application/json; charset=utf-8" }',
+    );
+    expect(paths(yaml)).toContain('steps[0].request.headers.content-type');
+  });
+
+  it('accepts a form body with a compatible, parameterized content-type (charset allowed)', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "application/x-www-form-urlencoded; charset=utf-8" }',
+    );
+    expect(paths(yaml)).toEqual([]);
+  });
+
+  it('tolerates whitespace around the media type in a compatible form content-type', () => {
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "  application/x-www-form-urlencoded  ; charset=utf-8" }',
+    );
+    expect(paths(yaml)).toEqual([]);
+  });
+
+  it('judges a duplicate-cased content-type by the LAST entry — the one that ships on the wire', () => {
+    // Mirrors buildHeaders' merge order (`.set()` in Object.entries order, per-
+    // request wins by position): the second entry here is what actually ships.
+    const acceptedYaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { Content-Type: application/json, content-type: application/x-www-form-urlencoded }',
+    );
+    expect(paths(acceptedYaml)).toEqual([]);
+
+    const rejectedYaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: application/x-www-form-urlencoded, Content-Type: application/json }',
+    );
+    expect(paths(rejectedYaml)).toContain('steps[0].request.headers.Content-Type');
+  });
+
+  it('accepts a form body with a templated content-type header (deferred to the client)', () => {
+    // The schema runs before the runner's `{{ ... }}` variable substitution
+    // (spec Section 7.1), so it cannot know what this resolves to — flagging it
+    // here would reject scenarios whose resolved value is actually compatible.
+    // The client re-checks the resolved value after substitution (spec Section 9.6).
+    const yaml = withRequest(
+      'method: POST',
+      'path: /oauth2/token',
+      'form: { grant_type: authorization_code }',
+      'headers: { content-type: "{{ variables.contentType }}" }',
+    );
+    expect(paths(yaml)).toEqual([]);
+  });
+
   // Cookie extraction differs from the two sources above only in its `from`.
   const cookieExtract = (from: string) => `
 version: 1
