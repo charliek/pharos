@@ -3,6 +3,7 @@ import type { ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { REDACTED } from '../src/comparison/redaction';
 import {
   MIN_SUBSTRING_LENGTH,
   maskMismatches,
@@ -149,6 +150,69 @@ describe('SensitiveValues — masking policy', () => {
     cyclic.register('VALUE-OF-THE-FIRST-ONE', 'NAME-OF-THE-OTHER-ONE');
     expect(cyclic.maskString('VALUE-OF-THE-FIRST-ONE')).toBe('[REDACTED:***REDACTED***]');
     expect(cyclic.maskString('NAME-OF-THE-OTHER-ONE')).toBe('[REDACTED:***REDACTED***]');
+  });
+
+  it('collapses a name whose masking would synthesize another registered secret', () => {
+    const values = new SensitiveValues();
+    // Masking `AAAAAAAA` inside the variable *name* splices its neighbours
+    // around `***REDACTED***`, reproducing the first secret exactly — one
+    // longest-first pass is not enough, so a name that still contains anything
+    // registered is collapsed wholesale.
+    values.register('spliced', `pre${REDACTED}post`);
+    values.register('inner', 'AAAAAAAA');
+    values.register('preAAAAAAAApost', 'THIRD-SECRET-VALUE');
+    const masked = values.maskString('THIRD-SECRET-VALUE');
+    expect(masked).not.toContain(`pre${REDACTED}post`);
+    expect(masked).not.toContain('AAAAAAAA');
+    expect(masked).toBe('[REDACTED:***REDACTED***]');
+  });
+
+  it('walks a circular structure once, registering every reachable scalar', () => {
+    const warnings: string[] = [];
+    const values = new SensitiveValues((message) => warnings.push(message));
+    const child: Record<string, unknown> = { refresh_token: 'CYCLIC-REFRESH-VALUE' };
+    const bundle: Record<string, unknown> = { access_token: 'CYCLIC-ACCESS-VALUE', child };
+    child.parent = bundle; // the cycle a YAML alias can preserve
+    bundle.self = bundle;
+    expect(() => values.register('bundle', bundle)).not.toThrow();
+    expect(values.maskString('a CYCLIC-ACCESS-VALUE b CYCLIC-REFRESH-VALUE')).toBe(
+      'a [REDACTED:bundle] b [REDACTED:bundle]',
+    );
+    // Nothing was missed — every object is walked once — so nothing to warn about.
+    expect(warnings).toEqual([]);
+  });
+
+  it('stops at the depth cap and warns that values beyond it are unmasked', () => {
+    const warnings: string[] = [];
+    const values = new SensitiveValues((message) => warnings.push(message));
+    // A chain deeper than the cap: the shallow token registers, the deep one
+    // is out of reach and must be announced rather than silently skipped.
+    let node: Record<string, unknown> = { deep: 'DEEP-TOKEN-VALUE' };
+    for (let i = 0; i < 40; i++) node = { nested: node };
+    node.shallow = 'SHALLOW-TOKEN-VALUE';
+    values.register('deepBundle', node);
+    expect(values.maskString('SHALLOW-TOKEN-VALUE')).toBe('[REDACTED:deepBundle]');
+    expect(values.maskString('DEEP-TOKEN-VALUE')).toBe('DEEP-TOKEN-VALUE'); // beyond the cap
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("'deepBundle'");
+    expect(warnings[0]).toMatch(/too deeply nested or too large/);
+    expect(warnings[0]).not.toContain('DEEP-TOKEN-VALUE');
+  });
+
+  it('stops at the node cap and warns', () => {
+    const warnings: string[] = [];
+    const values = new SensitiveValues((message) => warnings.push(message));
+    // Zero-padded so no value is a prefix of another — otherwise a registered
+    // early index would mask a later one by substring and blur the assertion.
+    const wide = Array.from(
+      { length: 20_000 },
+      (_, index) => `WIDE-TOKEN-VALUE-${String(index).padStart(5, '0')}`,
+    );
+    values.register('wide', wide);
+    expect(values.maskString('WIDE-TOKEN-VALUE-00000')).toBe('[REDACTED:wide]');
+    expect(values.maskString('WIDE-TOKEN-VALUE-19999')).toBe('WIDE-TOKEN-VALUE-19999');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/too deeply nested or too large/);
   });
 
   it('registers the scalar elements of an array (a wildcard extraction)', () => {

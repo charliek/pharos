@@ -465,7 +465,7 @@ cleanup:
 
 ### 4.10 Recording and replay specs
 
-The two scenarios below share `id: users.record-existing-user` and `stepId:
+The two scenarios below share `id: users.replay-get-user-recording` and `stepId:
 get-user` deliberately: the replay identity cross-check (Section 10.3) requires
 a fixture's stamped `scenarioId`/`stepId` to match the scenario/step now
 replaying it, so recording and replay are the same scenario with its `mode`
@@ -475,7 +475,7 @@ flipped after the fixture is captured, not two independently-named files.
 
 ```yaml
 version: 1
-id: users.record-existing-user
+id: users.replay-get-user-recording
 name: Record existing user behavior
 service: user-service
 tags: [read, recording]
@@ -495,7 +495,7 @@ steps:
 
 ```yaml
 version: 1
-id: users.record-existing-user
+id: users.replay-get-user-recording
 name: Replay existing user behavior against new service
 service: user-service
 tags: [read, regression]

@@ -118,6 +118,26 @@ function defaultWarn(message: string): void {
 }
 
 /**
+ * Bounds on the structure walk in {@link SensitiveValues.register}. A live
+ * response body is `JSON.parse` output and therefore acyclic and shallow, but a
+ * replayed recording's `bodyJson` is schema-`unknown` and a YAML alias can
+ * preserve a cycle — an unguarded walk would then recurse until the stack dies.
+ * The depth cap also stops a pathologically deep acyclic body from exhausting
+ * the stack, and the node cap bounds the total work. Both are far above any
+ * real credential payload, so hitting one means the extraction is not what its
+ * author thinks it is.
+ */
+const MAX_REGISTER_DEPTH = 32;
+const MAX_REGISTER_NODES = 10_000;
+
+/** Mutable state threaded through one `register` walk. */
+interface WalkBudget {
+  nodes: number;
+  /** True once a cap stopped the walk — the caller warns, since values were missed. */
+  capped: boolean;
+}
+
+/**
  * The scenario-scoped registry of extracted secret values. Created per scenario
  * run and carried on the variable context beside `variables`, so it lives and
  * dies with the values it describes and nothing leaks between scenarios.
@@ -127,8 +147,10 @@ export class SensitiveValues {
   private readonly candidates: Candidate[] = [];
   /** Candidate text → the variable name that first claimed it. */
   private readonly byText = new Map<string, string>();
-  /** Variables already warned about, so a re-extracted value warns once. */
+  /** `<kind>:<variable>` pairs already warned about, so a re-extraction warns once. */
   private readonly warned = new Set<string>();
+  /** Set when a candidate is added; the sort is deferred to the first read. */
+  private unsorted = false;
   private order = 0;
 
   constructor(private readonly warn: WarnFn = defaultWarn) {}
@@ -142,16 +164,59 @@ export class SensitiveValues {
    * at all while every secret inside it stayed live. Empty strings, booleans,
    * null, and already-registered texts are skipped. Keys are structure, not
    * values, and are not registered.
+   *
+   * The walk is bounded (see {@link MAX_REGISTER_DEPTH}): a cycle is safe, and
+   * a structure past the caps stops the descent and warns — silently failing to
+   * register a secret is fail-open, so it must be said out loud.
    */
   register(name: string, value: unknown): void {
+    const budget: WalkBudget = { nodes: MAX_REGISTER_NODES, capped: false };
+    this.walk(name, value, 0, new WeakSet<object>(), budget);
+    if (budget.capped) this.warnStructureCapped(name);
+  }
+
+  /**
+   * One node of the registration walk. `seen` makes a cyclic (or merely shared)
+   * structure safe *without* losing anything: every reachable object is walked
+   * exactly once, so every reachable scalar is still registered — which is why
+   * a cycle alone does not warn, while a cap does.
+   */
+  private walk(
+    name: string,
+    value: unknown,
+    depth: number,
+    seen: WeakSet<object>,
+    budget: WalkBudget,
+  ): void {
+    if (budget.nodes <= 0) {
+      budget.capped = true;
+      return;
+    }
+    budget.nodes -= 1;
     if (value !== null && typeof value === 'object') {
-      for (const item of Object.values(value)) this.register(name, item);
+      const container = value as object;
+      if (seen.has(container)) return; // already walked: a cycle or a shared node
+      if (depth >= MAX_REGISTER_DEPTH) {
+        budget.capped = true;
+        return;
+      }
+      seen.add(container);
+      for (const item of Object.values(container)) {
+        this.walk(name, item, depth + 1, seen, budget);
+      }
       return;
     }
     const text = scalarText(value);
     if (text === undefined || text === '') return;
     this.warnIfUnmaskableInComposites(name, text);
     for (const variant of variantsOf(text)) this.add(name, variant);
+  }
+
+  /** Warn once per variable per kind; the message never carries the value itself. */
+  private warnOnce(kind: string, name: string, message: string): void {
+    if (this.warned.has(`${kind}:${name}`)) return;
+    this.warned.add(`${kind}:${name}`);
+    this.warn(message);
   }
 
   /**
@@ -161,9 +226,10 @@ export class SensitiveValues {
    * value — a warning that printed the secret would be the very leak it reports.
    */
   private warnIfUnmaskableInComposites(name: string, text: string): void {
-    if (text.length >= MIN_SUBSTRING_LENGTH || this.warned.has(name)) return;
-    this.warned.add(name);
-    this.warn(
+    if (text.length >= MIN_SUBSTRING_LENGTH) return;
+    this.warnOnce(
+      'short',
+      name,
       `warning: sensitive value '${name}' is shorter than ${MIN_SUBSTRING_LENGTH} characters — ` +
         'it is masked wherever it appears on its own, but an occurrence inside a larger string ' +
         "(e.g. 'Bearer <value>') is left as-is, because replacing so short a string everywhere " +
@@ -171,11 +237,35 @@ export class SensitiveValues {
     );
   }
 
+  /** Warn when the bounded walk gave up: whatever lay beyond the cap is unmasked. */
+  private warnStructureCapped(name: string): void {
+    this.warnOnce(
+      'capped',
+      name,
+      `warning: sensitive value '${name}' is too deeply nested or too large to register ` +
+        `completely (limits: depth ${MAX_REGISTER_DEPTH}, ${MAX_REGISTER_NODES} nodes) — ` +
+        'values beyond that bound are NOT masked in output; extract a narrower path instead',
+    );
+  }
+
   private add(name: string, text: string): void {
     if (this.byText.has(text)) return; // first registration wins
     this.byText.set(text, name);
     this.candidates.push({ text, name, order: this.order++ });
-    this.candidates.sort((a, b) => b.text.length - a.text.length || a.order - b.order);
+    this.unsorted = true;
+  }
+
+  /**
+   * The candidates, longest-first with registration order as the deterministic
+   * tie-break. Sorted lazily on first read rather than on every `add`, since a
+   * bundle extraction registers many values in a row before anything is masked.
+   */
+  private get ordered(): readonly Candidate[] {
+    if (this.unsorted) {
+      this.candidates.sort((a, b) => b.text.length - a.text.length || a.order - b.order);
+      this.unsorted = false;
+    }
+    return this.candidates;
   }
 
   /**
@@ -196,10 +286,18 @@ export class SensitiveValues {
   private safeName(name: string): string {
     if (this.byText.has(name)) return REDACTED;
     let out = name;
-    for (const candidate of this.candidates) {
+    for (const candidate of this.ordered) {
       if (candidate.text.length < MIN_SUBSTRING_LENGTH) continue;
       if (out.includes(candidate.text)) out = out.split(candidate.text).join(REDACTED);
     }
+    // A single longest-first pass can *synthesize* a registered value: splicing
+    // REDACTED in between two neighbours can produce a third secret's text
+    // exactly (`preAAAAAAAApost` + a secret `pre***REDACTED***post`). Rather
+    // than iterate to a fixpoint, fail closed — if anything registered is still
+    // present, at any length, this name is not safe to print at all. The blast
+    // radius is one marker label, so the strictest possible check is affordable
+    // here in a way it would not be over arbitrary output.
+    if (this.candidates.some((candidate) => out.includes(candidate.text))) return REDACTED;
     return out;
   }
 
@@ -224,7 +322,7 @@ export class SensitiveValues {
     const exact = this.byText.get(text);
     if (exact !== undefined) return this.markerFor(exact);
     let out = text;
-    for (const candidate of this.candidates) {
+    for (const candidate of this.ordered) {
       if (candidate.text.length < MIN_SUBSTRING_LENGTH) continue;
       if (!out.includes(candidate.text)) continue;
       out = out.split(candidate.text).join(this.markerFor(candidate.name));
