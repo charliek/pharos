@@ -12,7 +12,10 @@ reports differences deterministically in local dev and CI. The authoritative
 design is `docs/pharos_spec.md` (Section numbers referenced throughout the code
 refer to it). `docs/runbook.md` and `docs/prfaq.md` give operational and
 motivational context; `docs/limen_spec.md` describes the companion migration
-proxy that **consumes** the same behavioral contract Pharos refines.
+proxy that **consumes** the same behavioral contract Pharos refines. limen is
+upstream-of-record for `docs/runbook.md`, `docs/prfaq.md`, and
+`docs/limen_spec.md` — pharos keeps byte-identical cross-copies; edit there and
+re-sync here, never the reverse.
 
 ## Toolchain
 
@@ -105,6 +108,14 @@ both (validation error).
 
 ## Commits
 
-The build proceeds phase by phase (spec Section 14). Each phase: implement →
-quality gate green → `/simplify` → `/codex:rescue` review → quality gate green
-→ commit to `main`. Keep commits scoped to a phase or a coherent slice of one.
+The build proceeds phase by phase (spec Section 14), and **a phase is a feature
+branch, not a series of commits on `main`.** Branch
+(`feature/plan-0NN-<slug>`, or `feature/<slug>` for work outside the plan
+sequence), land the phase's commits there, then open a PR and merge it once CI
+is green; `main` moves by merge commit. Keep each commit scoped to a phase or a
+coherent slice of one.
+
+Every commit on the branch is gated the same way: implement → quality gate
+green → `/simplify` → `/codex:rescue` review → quality gate green → commit.
+The gate is the section above, unchanged — the branch changes where the
+commits land, not what has to be true before one is made.

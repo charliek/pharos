@@ -44,7 +44,7 @@ audit:  ## Audit installed package licenses against the allowlist
 # ---- docs --------------------------------------------------------------
 
 .PHONY: docs docs-serve
-docs:  ## Build the mkdocs site into site-build/
+docs:  ## Build the zensical site into site-build/
 	uv sync --locked --group docs && uv run --locked zensical build --strict
 
 docs-serve:  ## Serve the docs locally with live reload
