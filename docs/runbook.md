@@ -289,15 +289,19 @@ A route marked `has-external-side-effects` (email, third-party call, payment, jo
 | Method | Typical idempotency | Shadow? | Failover? |
 |---|---|---|---|
 | GET / HEAD | idempotent | yes (default) | yes |
-| PUT / DELETE | idempotent | no | yes, if configured |
-| POST | non-idempotent | no | **no** unless explicitly safe |
+| PUT | idempotent (typically) | no by default; opt-in possible, **with a recorded per-route idempotence analysis** | yes, if configured |
+| PATCH | **not inherently idempotent** — `validate.rs`'s `NON_IDEMPOTENT_METHODS` lists it alongside `POST`, so a route-specific proof is required, not assumed | no by default; opt-in possible, **with a recorded per-route idempotence analysis** | **no** unless explicitly safe — a `failover_to_legacy` route carrying `PATCH` must set `failover_safe: true` after that analysis |
+| DELETE | idempotent | **no — not eligible for shadowing at all** | yes, if configured |
+| POST | non-idempotent | no by default; opt-in possible, **with a recorded per-route idempotence analysis** | **no** unless explicitly safe |
 | POST-as-query (logical read, no writes) | idempotent | yes, if confirmed no side effects | yes |
 
-### 6.5 Logical reads over POST
+### 6.5 Logical reads over POST, and opted-in writes over POST/PUT/PATCH
 
 Some services use POST for complex queries that don't mutate state. If you can **confirm** (from code) that such a route is side-effect-free, it may be treated as a read for shadowing — but this requires explicit confirmation, not assumption, and should be noted in the route inventory.
 
-Limen makes that confirmation explicit in config: the route opts the method in with `comparison.shadow_methods: ["POST"]` (see the [config reference](https://charliek.github.io/limen/reference/config-reference/)). The request body is buffered within `max_body_bytes` and replayed byte-identically to both upstreams; a larger body streams to the primary and is not shadowed (`shadow_skipped{reason="request_too_large"}`). Nothing changes for routes that don't opt in.
+Limen makes that confirmation explicit in config: the route opts the method in with `comparison.shadow_methods: ["POST"]` (also eligible: `PUT`, `PATCH`; `DELETE` deliberately is not — see the [config reference](https://charliek.github.io/limen/reference/config-reference/)). The request body is buffered within `max_body_bytes` and replayed byte-identically to both upstreams; a larger body streams to the primary and is not shadowed (`shadow_skipped{reason="request_too_large"}`). Nothing changes for routes that don't opt in.
+
+Listing a method in Limen's allowlist only makes it *mechanically* eligible — it is not a safety proof for any given route. Before opting a route's write into `shadow_methods`, record a per-route idempotence analysis: name the mutation, state the response-visible effect of the shadow executing it a second time, and identify the corpus constraint (fixed key, idempotent upsert, response that doesn't expose ordering, etc.) that keeps that effect from surfacing. Treat the allowlist as a reminder that this analysis is owed, not as evidence it was done.
 
 ---
 
@@ -402,14 +406,14 @@ In one invocation `verdict` waits for the shadow/comparison/sink pipeline to qui
 |---|---|---|
 | `0` | Drained, floors met, sink integral, zero non-canary mismatches. | Advance — subject to the latency/error rows of 8.1, which `verdict` does not judge. |
 | `10` | Mismatches found. | Triage each one: real divergence → fix `new`; incidental → a narrow contract rule; intended → `intentional-change`. |
-| `20` | Floors unmet — including a config that floors nothing at all. | **Not** a parity result. Extend the traffic corpus (or fix the config); the run proved nothing about the unfloored routes. |
+| `20` | Floors unmet: a route below its floor (**starved**), or at its floor with sampled work that went uncompared — a skip of any reason, or a shadow that never answered (**undermined**) — or a config that floors nothing at all. | **Not** a parity result, and the two causes take different medicine. Starved: extend the traffic corpus (or fix the config) — the run proved nothing about that route. Undermined: read the verdict's remedy line for the named reason (raise `max_body_bytes`, raise `server.shadow_concurrency_limit` or lower drive concurrency, raise `timeouts.primary_ms`, or — for `event_stream` — unfloor the route and relay it instead), change that one knob, **restart limen, and re-drive the floors**. A shadow failure (`timeout`/`error`) is a finding about `new`, not about limen's tooling — read its logs before re-running. The counters behind this check are cumulative for the process's life, so re-running `verdict` alone against the same process stays `20`. |
 | `30` | Sink integrity: dropped sink records, unparseable sink lines, counter routes this config does not know, per-route disagreement between sink and engine — or, with `--canary`, a canary that never landed or one on which sink and engine disagree. | Stop. Trust none of the numbers in this run until the sink is understood. |
 | `40` | Drain timeout — the pipeline never quiesced. | Re-run with traffic actually stopped; the mismatch and floor numbers from a run that never drained are unreliable, which is why `40` outranks `10` and `20`. |
 | `50` | A required input was unavailable (control plane unreachable, sink unreadable, a required metric series absent, a refused canary trigger). | A refused verdict, not a failed one. Fix the invocation. |
 
 The disciplines behind those codes are set out in full in [prove your lens bites](https://charliek.github.io/limen/guides/prove-your-lens-bites/) — read it once before the first campaign rather than deriving them from the exit table. Two of them decide whether a clean exit means anything:
 
-- **Floors prove something was compared.** A floor counts comparisons, not coverage; `min_comparisons: 20` is met by 20 comparisons out of 20 eligible requests exactly as much as by 20 out of 20,000. Coverage is a `sample_rate` and traffic-volume decision made *before* the campaign runs.
+- **Floors prove something was compared, and "compared" now means something stricter than "reached the comparison engine."** An *unsampled* request is a `sample_rate` decision made before the campaign runs — it appears in no floor at all, and coverage in that sense stays arithmetic you do yourself, traffic volume against `sample_rate`, not a metric to read off. A *sampled* request that was not compared is a different thing entirely: it is a skip (`response_too_large`, `request_too_large`, `concurrency_limit`, `response_buffer_timeout`, `event_stream`) or a shadow failure (`timeout`, `error`), and every one of them now fails the floor of the route it happened on — even once that route's raw comparison count clears `min_comparisons`. A shadow failure is a finding about `new`, not about limen's tooling; read its logs before re-running. `min_comparisons: 20` is still met by 20 comparisons out of 20 eligible requests exactly as by 20 out of 20,000 — what changed is that those 20 must themselves be 20 the pipeline actually finished, not 20 out of 23 where three quietly went uncompared.
 - **The canary proves the recording pipeline is live.** A campaign with real mismatches would eventually notice a broken sink; a campaign with zero real mismatches never would, because an empty sink and a correctly empty sink render identically. Run `--canary` in *every* campaign wrapper — a standing check that only runs when someone remembers is not a standing check. Note what it does not prove: it goes through no route's comparison rules and says nothing about whether any real shadow request was dispatched. Floors plus real traffic cover that half; the two are complementary, not redundant.
 
 Periodically — when the contract vocabulary changes materially, not every run — falsify the gate: mutate the config or the sink in a way with one predicted effect on the exit code, confirm the prediction, and revert. A gate nobody has ever seen fail is a gate nobody has tested.

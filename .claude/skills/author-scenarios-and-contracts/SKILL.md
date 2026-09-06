@@ -42,9 +42,15 @@ bun run record                                                # same flags as ab
 bunx pharos check-contract contracts/my-service.contract.yaml # the bin, once installed
 ```
 
-**Exit codes are 0 or 1 — there is no richer table.** `run` exits 1 when any scenario failed
-(or on a config/validation error), 0 otherwise; skips are reported separately and never fail a
-run, while production **refusals** do. `validate`/`check-contract` exit 1 on any invalid file.
+**Exit codes, `run`/`record`:**
+
+| Exit | Meaning |
+|---|---|
+| `0` | All selected required scenarios passed, and the scenario floor (`min_scenarios`) was met. |
+| `1` | At least one required scenario failed (a config/validation error also exits 1). Production **refusals** count as failures here; skips never do. |
+| `20` | The scenario floor was not met — evaluated on `executed`, never `passed + failed`, so a parse failure or refusal can't prop up the count. Takes precedence over `1`. `record` narrows to `legacy_record` by construction, so it gates on its own floor (`min(min_scenarios, 1)`), not the suite-wide one, unless `--min-scenarios` overrides it. |
+
+`validate`/`check-contract` exit 1 on any invalid file (no floor there).
 [reference/cli](https://charliek.github.io/pharos/reference/cli/) ·
 [guides/reporting-and-ci](https://charliek.github.io/pharos/guides/reporting-and-ci/).
 

@@ -26,6 +26,7 @@ Configuration is layered, each source overriding the previous:
 | `allow_destructive_tests` | `ALLOW_DESTRUCTIVE_TESTS` | `false` | Run destructive scenarios. |
 | `allow_production_guard_override` | `ALLOW_PRODUCTION_GUARD_OVERRIDE` | `false` | Run scenarios requiring the production guard. |
 | `allow_recording_updates` | `ALLOW_RECORDING_UPDATES` | `false` | Allow recording writes (refused in CI without it). |
+| `min_scenarios` | `MIN_SCENARIOS` | `1` | The run's scenario floor (spec Section 11.5, mirrors limen's `min_comparisons`): how many scenarios must actually *execute* for `run`/`record` to exit 0 or 1 rather than 20. `0` is accepted but inert — executing nothing is always a failure, so a floor of `0` and a floor of `1` accept identical inputs. **Unlike every other env var on this page, an empty, negative, fractional, or non-numeric `MIN_SCENARIOS` is a hard `ConfigError`, not silently ignored** — a floor that silently defaulted would be a fresh false-green vector. See [reporting & CI](../guides/reporting-and-ci.md#exit-codes). |
 | `redaction` | — | see below | Header names, JSON paths, and query params to mask in output. |
 
 ## Example config file
