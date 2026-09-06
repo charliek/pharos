@@ -51,7 +51,7 @@ base URL for a selected mode fails fast with an actionable message.
 | Exit | Meaning |
 |---|---|
 | `0` | All selected required scenarios passed, and the scenario floor (`min_scenarios`) was met. |
-| `1` | At least one required scenario failed (a production refusal counts as a failure). |
+| `1` | At least one required scenario failed (a production refusal counts as a failure), or the command refused before running any scenario (invalid config, malformed `MIN_SCENARIOS`/`--min-scenarios`, or `record` refused in CI) — a refusal never reaches the floor. |
 | `20` | The scenario floor was not met — takes precedence over `1`. Names the cause (missing/empty/unreadable `scenario_dir`, a filter that matched nothing, a named `--scenario` that a safety gate skipped, etc.). |
 
 See [reporting & CI](../guides/reporting-and-ci.md#exit-codes) for the full
@@ -102,7 +102,7 @@ explicitly, honored verbatim. See
 | Exit | Meaning |
 |---|---|
 | `0` | The floor was met and every scenario that ran recorded/passed cleanly. |
-| `1` | The floor was met but at least one scenario failed. |
+| `1` | The floor was met but at least one scenario failed — or the command refused before running any scenario at all (invalid config, malformed `MIN_SCENARIOS`/`--min-scenarios`, or `record` refused in CI without `ALLOW_RECORDING_UPDATES`), in which case the floor was never evaluated. |
 | `20` | `record`'s floor was not met (e.g. the corpus has no `legacy_record` scenarios, or a named `--scenario` did not execute) — takes precedence over `1`. |
 
 ## `check-contract`

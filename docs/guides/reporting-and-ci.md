@@ -52,7 +52,7 @@ neither the JSON nor the JUnit report can leak a secret.
 | Exit | Meaning |
 |---|---|
 | `0` | All selected required scenarios passed, and the run's scenario floor was met. |
-| `1` | At least one required scenario failed (a production refusal counts as a failure here). |
+| `1` | At least one required scenario failed (a production refusal counts as a failure here), **or** the command refused before running scenarios at all — an invalid config file, a malformed `MIN_SCENARIOS`/`--min-scenarios`, or `record` refused in CI without `ALLOW_RECORDING_UPDATES`. Those refusals never reach the floor. |
 | `20` | The run's scenario floor (`min_scenarios`) was not met — insufficient evidence, regardless of whether anything also failed. |
 
 Precedence is **20 > 1 > 0**: insufficient evidence makes a lower finding
@@ -96,10 +96,12 @@ Scenarios may be skipped (not failed) by a safety gate:
 
 A skipped scenario imposes no base-URL requirement, so a guarded scenario does
 not force config it never uses. A skip counts only under the `skipped`
-summary counter — never `passed` — and never fails the run by itself. The one
-case where a skip still ends the run non-zero is a scenario named by
-`--scenario`: it executed nothing, so the run misses its floor and exits `20`
-(naming a scenario is the statement that it must run).
+summary counter — never `passed` — and never increments `failed`. It can still
+end the run non-zero, though, because a skipped scenario is **excluded from
+`executed`**: any skip lowers the floor's numerator, so a run that skips its way
+below `min_scenarios` exits `20`. A scenario named by `--scenario` is only the
+guaranteed case — it executed nothing at all, and naming a scenario is the
+statement that it must run.
 
 ### `environment: production` is fail-closed
 
@@ -142,8 +144,10 @@ verbatim.
 ## What a complete run needs
 
 Pharos has no `pharos doctor` and does not preflight the environment. A
-missing `legacy_base_url`/`new_base_url` for a selected mode fails fast at
-config-load time with an actionable message, and a missing template variable
+missing `legacy_base_url`/`new_base_url` for a selected mode fails with an
+actionable message — checked after discovery, filtering and the safety gates,
+so a scenario that is skipped never forces config it would not have used, and
+before any selected scenario issues a request, and a missing template variable
 (e.g. `{{ env.TEST_USER_EMAIL }}`) fails loudly the moment a step tries to
 substitute it, marking that scenario `pass: false`. Both are loud failures,
 not silent ones — pharos#12's design point was never "a bad environment goes
