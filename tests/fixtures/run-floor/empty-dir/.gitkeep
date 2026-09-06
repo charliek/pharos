@@ -1,0 +1,4 @@
+# An intentionally scenario-less directory: pharos#12's P3 probe (an empty
+# scenario_dir printed "0 scenario(s) … exit 0"). Git needs a file to keep the
+# directory, and this one is invisible to scenario discovery (dotfile, and not
+# *.yaml/*.yml/*.json).

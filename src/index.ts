@@ -14,6 +14,7 @@
 // --- Config (spec Section 6): the shape of pharos.config.json/.yaml once loaded. ---
 export {
   type ConfigOverride,
+  DEFAULT_MIN_SCENARIOS,
   defaultConfig,
   type LoadConfigOptions,
   loadConfig,

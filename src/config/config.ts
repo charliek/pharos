@@ -49,8 +49,29 @@ export interface PharosConfig {
   /** Additional guard required to run scenarios marked requiresProductionGuardOverride. */
   allow_production_guard_override: boolean;
   allow_recording_updates: boolean;
+  /**
+   * The run's scenario floor (spec Section 11.5): how many scenarios must
+   * actually *execute* for the run to be trustworthy. Mirrors limen's
+   * `min_comparisons`.
+   *
+   * **`0` and `1` behave identically.** `0` nominally opts out of the minimum,
+   * but never out of the zero-execution guard — a run that executed nothing is
+   * never a pass — and once that guard forces `executed >= 1`, a floor of 0 and
+   * a floor of 1 are satisfied by exactly the same runs. `0` is therefore
+   * accepted (it reads as "I am not asserting a size") and inert; do not
+   * "restore" a meaning to it, and do not write a test claiming one, because
+   * there is no input that distinguishes the two.
+   */
+  min_scenarios: number;
   redaction: RedactionTargets;
 }
+
+/**
+ * Default floor: one scenario. A run that executed nothing used to print
+ * `0 scenario(s): 0 passed …` and exit 0 (pharos#12), so the floor is on by
+ * default rather than opt-in.
+ */
+export const DEFAULT_MIN_SCENARIOS = 1;
 
 /** A partial config, as produced by a config file, env, or CLI flags. */
 export interface ConfigOverride
@@ -74,6 +95,7 @@ export function defaultConfig(): PharosConfig {
     allow_destructive_tests: false,
     allow_production_guard_override: false,
     allow_recording_updates: false,
+    min_scenarios: DEFAULT_MIN_SCENARIOS,
     redaction: {
       headers: ['authorization', 'cookie', 'set-cookie', 'x-api-key'],
       json_paths: [],
@@ -109,6 +131,7 @@ const configFileSchema = z
     allow_destructive_tests: z.boolean().optional(),
     allow_production_guard_override: z.boolean().optional(),
     allow_recording_updates: z.boolean().optional(),
+    min_scenarios: z.number().int().nonnegative().optional(),
     redaction: redactionFileSchema.optional(),
   })
   .strict();

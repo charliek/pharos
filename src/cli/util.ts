@@ -7,6 +7,26 @@ export function relativePath(file: string): string {
   return rel === '' || rel.startsWith('..') ? file : rel;
 }
 
+/**
+ * Write `text` and resolve once the runtime has handed it to the OS.
+ *
+ * `process.exit` truncates a pending write when the stream is a pipe — which is
+ * every CI job and every subprocess test — so a `write(...)` immediately
+ * followed by `process.exit(20)` can lose the accounting line an operator needs
+ * to act on. Verified under bun 1.3: 200KB written and then exited drops its
+ * tail; awaiting the write's callback first does not. Awaiting the *last*
+ * non-empty write to a stream is enough (writes are delivered in order), so
+ * callers buffer and write once per stream. An empty write is not a barrier —
+ * bun completes it without draining what is queued ahead of it — hence the
+ * early return, so `writeStream(stream, '')` cannot be mistaken for a flush.
+ */
+export function writeStream(stream: NodeJS.WriteStream, text: string): Promise<void> {
+  if (text === '') return Promise.resolve();
+  return new Promise((resolve) => {
+    stream.write(text, () => resolve());
+  });
+}
+
 /** Print a file's validation issues to stderr, one per line, field-addressed. */
 export function printFileIssues(file: string, issues: FieldIssue[]): void {
   process.stderr.write(`✗ ${relativePath(file)}\n`);

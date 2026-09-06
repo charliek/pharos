@@ -1,0 +1,10 @@
+version: 1
+id: record.other-a
+name: a scenario record can never run
+service: s
+tags: [read]
+mode: compare_live
+steps:
+  - id: get
+    request: { method: GET, path: /ok }
+    compare: { strategy: json_semantic, status: same }

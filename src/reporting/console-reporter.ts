@@ -35,14 +35,37 @@ export function renderConsoleReport(report: TestRunReport): string {
     }
   }
 
-  const { total, passed, failed, skipped } = report.summary;
+  const {
+    discovered,
+    executed,
+    passed,
+    failed,
+    skipped,
+    filtered,
+    parseFailed,
+    refused,
+    narrowed,
+  } = report.summary;
+  // `discovered` leads the line on purpose: the run's denominator is what it
+  // found on disk, not what survived filtering (pharos#12). The optional
+  // segments appear only when non-zero so an ordinary run stays one line.
+  const segments = [
+    `${discovered} discovered`,
+    `${executed} executed`,
+    `${passed} passed`,
+    `${failed} failed`,
+    `${skipped} skipped`,
+  ];
+  if (filtered > 0) {
+    segments.push(
+      narrowed.length > 0 ? `${filtered} filtered (${narrowed.join(' ')})` : `${filtered} filtered`,
+    );
+  }
+  if (parseFailed > 0) segments.push(`parse-failed ${parseFailed}`);
+  if (refused > 0) segments.push(`refused ${refused}`);
   lines.push('');
-  lines.push(
-    `${total} scenario(s): ${passed} passed, ${failed} failed, ${skipped} skipped (${report.durationMs}ms)`,
-  );
+  lines.push(`${segments.join(' · ')} (${report.durationMs}ms)`);
+  const floor = report.summary.floor;
+  if (!floor.met) lines.push(`✗ run floor not met: ${floor.reason ?? 'min_scenarios'}`);
   return `${lines.join('\n')}\n`;
-}
-
-export function printConsoleReport(report: TestRunReport): void {
-  process.stdout.write(renderConsoleReport(report));
 }

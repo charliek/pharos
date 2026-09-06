@@ -62,6 +62,35 @@ describe('configFromEnv', () => {
     );
   });
 
+  it('projects MIN_SCENARIOS as the run floor, including the 0 opt-out', () => {
+    expect(configFromEnv({ MIN_SCENARIOS: '3' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: 3,
+    });
+    expect(configFromEnv({ MIN_SCENARIOS: '0' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: 0,
+    });
+    expect(configFromEnv({ MIN_SCENARIOS: '  5  ' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: 5,
+    });
+  });
+
+  it('fails closed (ConfigError) on a garbage MIN_SCENARIOS rather than defaulting to 1', () => {
+    // A floor that silently became the default would be a fresh false green —
+    // the exact failure mode the floor exists to catch (pharos#12).
+    for (const value of ['abc', '-1', '1.5', '', '  ']) {
+      expect(() => configFromEnv({ MIN_SCENARIOS: value } as NodeJS.ProcessEnv)).toThrow(
+        ConfigError,
+      );
+    }
+    try {
+      configFromEnv({ MIN_SCENARIOS: 'abc' } as NodeJS.ProcessEnv);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ConfigError).message).toContain('MIN_SCENARIOS');
+      expect((error as ConfigError).message).toContain('abc');
+    }
+  });
+
   it('trims surrounding whitespace before validating PHAROS_ENVIRONMENT', () => {
     expect(configFromEnv({ PHAROS_ENVIRONMENT: '  production  ' } as NodeJS.ProcessEnv)).toEqual({
       environment: 'production',
@@ -153,6 +182,35 @@ describe('loadConfig precedence (defaults < file < env < overrides)', () => {
       cwd: here,
     });
     expect(config.legacy_base_url).toBe('http://override-legacy');
+  });
+
+  it('reads min_scenarios from the config file, with env and overrides winning in turn', () => {
+    const fromFile = loadConfig({
+      configPath: resolve(here, 'fixtures/config/pharos.config.min-scenarios.json'),
+      env: {},
+      cwd: here,
+    });
+    expect(fromFile.min_scenarios).toBe(7);
+
+    const fromEnv = loadConfig({
+      configPath: resolve(here, 'fixtures/config/pharos.config.min-scenarios.json'),
+      env: { MIN_SCENARIOS: '9' } as NodeJS.ProcessEnv,
+      cwd: here,
+    });
+    expect(fromEnv.min_scenarios).toBe(9);
+
+    const overridden = loadConfig({
+      configPath: resolve(here, 'fixtures/config/pharos.config.min-scenarios.json'),
+      env: { MIN_SCENARIOS: '9' } as NodeJS.ProcessEnv,
+      overrides: { min_scenarios: 2 },
+      cwd: here,
+    });
+    expect(overridden.min_scenarios).toBe(2);
+  });
+
+  it('defaults the run floor to one executed scenario', () => {
+    expect(loadConfig({ env: {}, cwd: here }).min_scenarios).toBe(1);
+    expect(defaultConfig().min_scenarios).toBe(1);
   });
 
   it('resolves directory fields to absolute paths', () => {

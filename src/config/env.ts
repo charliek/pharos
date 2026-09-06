@@ -24,11 +24,12 @@ function parseBool(value: string | undefined): boolean | undefined {
  * config override. Only set keys are returned, so this layers cleanly over the
  * config file and under CLI arguments.
  *
- * `PHAROS_ENVIRONMENT` is safety-relevant (Section 12), so an unrecognized
- * value throws {@link ConfigError} naming the value and the valid options
- * rather than silently falling back to the `local` default (fail-closed:
- * `PHAROS_ENVIRONMENT=prod` must not quietly become `local`). Surrounding
- * whitespace is trimmed before validation.
+ * `PHAROS_ENVIRONMENT` is safety-relevant (Section 12) and `MIN_SCENARIOS` is
+ * the run floor (Section 11.5), so an unrecognized value of either throws
+ * {@link ConfigError} naming the value rather than silently falling back to a
+ * default: `PHAROS_ENVIRONMENT=prod` must not quietly become `local`, and
+ * `MIN_SCENARIOS=abc` must not quietly become 1. Surrounding whitespace is
+ * trimmed before validation.
  */
 export function configFromEnv(env: NodeJS.ProcessEnv): ConfigOverride {
   const out: ConfigOverride = {};
@@ -55,6 +56,20 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ConfigOverride {
       ]);
     }
     out.environment = trimmed;
+  }
+
+  if (env.MIN_SCENARIOS !== undefined) {
+    const trimmed = env.MIN_SCENARIOS.trim();
+    // Fail closed, like PHAROS_ENVIRONMENT and unlike DEFAULT_TIMEOUT_MS: a
+    // garbage floor that quietly became the default 1 would be a fresh
+    // false-green vector — exactly the class of bug the floor exists to close.
+    if (!/^\d+$/.test(trimmed)) {
+      throw new ConfigError([
+        'MIN_SCENARIOS must be a non-negative integer ' +
+          `(got ${JSON.stringify(env.MIN_SCENARIOS)})`,
+      ]);
+    }
+    out.min_scenarios = Number(trimmed);
   }
 
   const destructive = parseBool(env.ALLOW_DESTRUCTIVE_TESTS);

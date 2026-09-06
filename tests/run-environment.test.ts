@@ -54,8 +54,8 @@ function findScenario(scenarios: ReturnType<typeof buildReport>['scenarios'], id
 
 describe('environment vs. allowedEnvironments — non-production (skip, not refusal)', () => {
   it('runs an untagged scenario and one tagged for the current environment', async () => {
-    const results = await runProject(config({ environment: 'local' }), {});
-    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+    const { results, accounting } = await runProject(config({ environment: 'local' }), {});
+    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', accounting);
 
     expect(findScenario(report.scenarios, 'env.everywhere').pass).toBe(true);
     expect(findScenario(report.scenarios, 'env.non-production').pass).toBe(true);
@@ -63,8 +63,8 @@ describe('environment vs. allowedEnvironments — non-production (skip, not refu
   });
 
   it('skips (not fails) a scenario tagged [production] alone, counted only under skipped', async () => {
-    const results = await runProject(config({ environment: 'local' }), {});
-    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+    const { results, accounting } = await runProject(config({ environment: 'local' }), {});
+    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', accounting);
 
     const productionOnly = findScenario(report.scenarios, 'env.production-only');
     expect(productionOnly.skipped).toBe(true);
@@ -76,7 +76,7 @@ describe('environment vs. allowedEnvironments — non-production (skip, not refu
   });
 
   it('staging also treats a non-production tag as eligible', async () => {
-    const results = await runProject(config({ environment: 'staging' }), {
+    const { results } = await runProject(config({ environment: 'staging' }), {
       scenarioId: 'env.non-production',
     });
     expect(results).toHaveLength(1);
@@ -87,7 +87,7 @@ describe('environment vs. allowedEnvironments — non-production (skip, not refu
 
 describe('environment: production — fail-closed refusal, not skip', () => {
   it('refuses an untagged scenario as a distinct failing result', async () => {
-    const results = await runProject(config({ environment: 'production' }), {
+    const { results } = await runProject(config({ environment: 'production' }), {
       scenarioId: 'env.untagged',
     });
     expect(results).toHaveLength(1);
@@ -98,7 +98,7 @@ describe('environment: production — fail-closed refusal, not skip', () => {
   });
 
   it('refuses a scenario tagged only for local/ci/staging', async () => {
-    const results = await runProject(config({ environment: 'production' }), {
+    const { results } = await runProject(config({ environment: 'production' }), {
       scenarioId: 'env.non-production',
     });
     expect(results[0].skipped).toBe(false);
@@ -106,7 +106,7 @@ describe('environment: production — fail-closed refusal, not skip', () => {
   });
 
   it('runs a scenario explicitly tagged for production', async () => {
-    const results = await runProject(config({ environment: 'production' }), {
+    const { results } = await runProject(config({ environment: 'production' }), {
       scenarioId: 'env.everywhere',
     });
     expect(results[0].skipped).toBe(false);
@@ -114,7 +114,7 @@ describe('environment: production — fail-closed refusal, not skip', () => {
   });
 
   it('runs a scenario tagged [production] only', async () => {
-    const results = await runProject(config({ environment: 'production' }), {
+    const { results } = await runProject(config({ environment: 'production' }), {
       scenarioId: 'env.production-only',
     });
     expect(results[0].skipped).toBe(false);
@@ -122,8 +122,8 @@ describe('environment: production — fail-closed refusal, not skip', () => {
   });
 
   it('refusals fail the run (non-zero exit) while any skip alone would not', async () => {
-    const results = await runProject(config({ environment: 'production' }), {});
-    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+    const { results, accounting } = await runProject(config({ environment: 'production' }), {});
+    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', accounting);
 
     expect(report.summary.skipped).toBe(0);
     expect(report.summary.failed).toBe(2); // untagged + non-production refused
@@ -144,7 +144,7 @@ describe('production_url_patterns — aborts before any request is issued', () =
 
   it('does not throw when environment is production, even with a matching pattern', async () => {
     const hostname = new URL(newServer?.url ?? '').hostname;
-    const results = await runProject(
+    const { results } = await runProject(
       config({ environment: 'production', production_url_patterns: [hostname] }),
       { scenarioId: 'env.everywhere' },
     );
@@ -153,17 +153,31 @@ describe('production_url_patterns — aborts before any request is issued', () =
 });
 
 describe('accounting hole: a tag filter erasing an explicitly-named --scenario', () => {
-  it('errors instead of silently dropping a would-be production refusal (false green)', async () => {
+  it('exits 20 instead of silently dropping a would-be production refusal (false green)', async () => {
     // env.non-production carries tag 'read' but not 'smoke'; excluding 'read'
     // erases it from the run set entirely — including the refusal it would
     // otherwise have produced under environment: production. Without the
     // accounting fix this returns zero results and a green (exit 0) report.
-    await expect(
-      runProject(config({ environment: 'production' }), {
-        scenarioId: 'env.non-production',
-        excludeTags: ['read'],
-      }),
-    ).rejects.toThrow(ConfigError);
+    //
+    // It is a floor outcome, not a ConfigError: the throw exited 1 before any
+    // report was written, while a `--scenario` the safety gate blocks exits 20
+    // with both reports on disk — one operator mistake, one exit code.
+    const cfg = config({ environment: 'production' });
+    const { results, accounting } = await runProject(cfg, {
+      scenarioId: 'env.non-production',
+      excludeTags: ['read'],
+    });
+    const report = buildReport(
+      results,
+      '2024-01-01T00:00:00Z',
+      '2024-01-01T00:00:00Z',
+      accounting,
+      cfg,
+    );
+    expect(report.summary.executed).toBe(0);
+    expect(exitCodeFor(report)).toBe(20);
+    expect(report.summary.floor.reason).toContain('env.non-production');
+    expect(report.summary.floor.reason).toMatch(/filtered/);
     expect(legacyServer?.requests).toHaveLength(0);
     expect(newServer?.requests).toHaveLength(0);
   });

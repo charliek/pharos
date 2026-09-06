@@ -1,0 +1,10 @@
+version: 1
+id: floor.only
+name: the only scenario
+service: s
+tags: [read]
+mode: compare_live
+steps:
+  - id: get
+    request: { method: GET, path: /ok }
+    compare: { strategy: json_semantic, status: same }
