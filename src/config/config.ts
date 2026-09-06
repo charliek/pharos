@@ -7,7 +7,8 @@ import { ValidationError, validateWithSchema } from '../errors';
 import { configFromEnv } from './env';
 
 /**
- * Pharos configuration (spec Section 6). Field names are snake_case to match the
+ * Pharos configuration (spec Section 6): the shape of `pharos.config.json`/`.yaml`
+ * **once loaded**, every field resolved. Field names are snake_case to match the
  * config file and the documented environment variables. Loading is layered:
  * defaults < config file < environment < CLI overrides. Mode-aware *semantic*
  * validation (e.g. compare_live needs both base URLs) is applied at run time by
@@ -49,8 +50,39 @@ export interface PharosConfig {
   /** Additional guard required to run scenarios marked requiresProductionGuardOverride. */
   allow_production_guard_override: boolean;
   allow_recording_updates: boolean;
+  /**
+   * The run's scenario floor (spec Section 11.5): how many scenarios must
+   * actually *execute* for the run to be trustworthy. Mirrors limen's
+   * `min_comparisons`.
+   *
+   * **Required, like every other field on this interface.** `PharosConfig` is
+   * the config *once loaded* (see the module docstring), where every field has
+   * been resolved from defaults < file < env < CLI; the partial input shape is
+   * {@link ConfigOverride}, and the default is {@link DEFAULT_MIN_SCENARIOS}.
+   * Making the floor optional here would let a programmatic driver hand
+   * `runProject` a config with no floor at all — a run with no denominator,
+   * which is the hole this field closes. Adding it was a deliberate breaking
+   * change for a consumer hand-building a loaded-config literal; spread
+   * `defaultConfig()` instead of listing fields.
+   *
+   * **`0` and `1` behave identically.** `0` nominally opts out of the minimum,
+   * but never out of the zero-execution guard — a run that executed nothing is
+   * never a pass — and once that guard forces `executed >= 1`, a floor of 0 and
+   * a floor of 1 are satisfied by exactly the same runs. `0` is therefore
+   * accepted (it reads as "I am not asserting a size") and inert; do not
+   * "restore" a meaning to it, and do not write a test claiming one, because
+   * there is no input that distinguishes the two.
+   */
+  min_scenarios: number;
   redaction: RedactionTargets;
 }
+
+/**
+ * Default floor: one scenario. A run that executed nothing used to print
+ * `0 scenario(s): 0 passed …` and exit 0 (pharos#12), so the floor is on by
+ * default rather than opt-in.
+ */
+export const DEFAULT_MIN_SCENARIOS = 1;
 
 /** A partial config, as produced by a config file, env, or CLI flags. */
 export interface ConfigOverride
@@ -74,6 +106,7 @@ export function defaultConfig(): PharosConfig {
     allow_destructive_tests: false,
     allow_production_guard_override: false,
     allow_recording_updates: false,
+    min_scenarios: DEFAULT_MIN_SCENARIOS,
     redaction: {
       headers: ['authorization', 'cookie', 'set-cookie', 'x-api-key'],
       json_paths: [],
@@ -109,6 +142,11 @@ const configFileSchema = z
     allow_destructive_tests: z.boolean().optional(),
     allow_production_guard_override: z.boolean().optional(),
     allow_recording_updates: z.boolean().optional(),
+    // `.safe()` as well as `.int()`: this zod's `.int()` is `Number.isInteger`,
+    // which accepts 1e20 — a floor the runtime cannot represent exactly. The two
+    // string-parsing entry points (MIN_SCENARIOS, --min-scenarios) reject that,
+    // and a config file must not be the one door left open.
+    min_scenarios: z.number().int().safe().nonnegative().optional(),
     redaction: redactionFileSchema.optional(),
   })
   .strict();

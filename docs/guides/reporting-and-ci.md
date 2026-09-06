@@ -20,10 +20,28 @@ redacted — no secret reaches disk.
 ```json
 {
   "startedAt": "...", "finishedAt": "...", "durationMs": 0,
-  "summary": { "total": 7, "passed": 6, "failed": 0, "skipped": 1 },
+  "summary": {
+    "total": 7, "passed": 6, "failed": 0, "skipped": 1,
+    "discovered": 8, "executed": 6, "filtered": 1, "parseFailed": 0, "refused": 0,
+    "narrowed": ["--exclude-tag jwt"],
+    "floor": { "minScenarios": 1, "executed": 6, "applied": 1, "met": true }
+  },
   "scenarios": [ { "scenarioId": "...", "pass": true, "steps": [ ... ] } ]
 }
 ```
+
+`discovered` is the file count fast-glob found under `scenario_dir` — the
+run's real denominator, independent of whatever survived filtering.
+`filtered` is everything dropped by mode or `--scenario`/`--include-tag`/
+`--exclude-tag` filtering; `parseFailed` and `refused` are reported (failing)
+results that never ran; `executed` is what actually ran — the floor's
+numerator. `narrowed` lists the explicit CLI narrowing in effect. `floor` is
+the run's [scenario-floor](#exit-codes) verdict. Every discovered file gets
+exactly one of these classifications, and `discovered` always equals their
+sum — a tool bug (not a bad run) if it doesn't. Above: `8 = 1 filtered + 0
+parseFailed + 0 refused + 1 skipped + 6 executed`. A safety-skipped scenario
+never ran, so it is *not* in `executed`; `total` (7) is every classification
+that produced a reported result — everything but the filtered one.
 
 The report deliberately omits the raw legacy/new responses; only the
 already-redacted comparison summary, mismatches, and diff text are included, so
@@ -31,13 +49,39 @@ neither the JSON nor the JUnit report can leak a secret.
 
 ## Exit codes
 
-`run` exits **non-zero** when any required scenario fails, and **zero** when all
-selected required scenarios pass. Skipped scenarios are reported separately and
-never fail the run on their own — so a CI gate is simply:
+| Exit | Meaning |
+|---|---|
+| `0` | All selected required scenarios passed, and the run's scenario floor was met. |
+| `1` | At least one required scenario failed (a production refusal counts as a failure here), **or** the command refused before running scenarios at all — an invalid config file, a malformed `MIN_SCENARIOS`/`--min-scenarios`, or `record` refused in CI without `ALLOW_RECORDING_UPDATES`. Those refusals never reach the floor. |
+| `20` | The run's scenario floor (`min_scenarios`) was not met — insufficient evidence, regardless of whether anything also failed. |
+
+Precedence is **20 > 1 > 0**: insufficient evidence makes a lower finding
+incomplete, so a floor miss outranks a scenario failure even when scenarios
+also failed. `20` is the same number limen uses for the same idea, so a
+wrapper driving both tools carries one vocabulary. `record` shares this table
+and evaluator, against its own floor — see
+[`record` has its own floor](#record-has-its-own-floor) below.
+
+The floor (`min_scenarios` — config field, `MIN_SCENARIOS` env, or
+`--min-scenarios <n>`; default `1`) is evaluated on `summary.executed`, never
+`passed + failed`: a parse failure or a production refusal is a reported
+result, not evidence that a scenario ran, so neither can prop up the
+numerator. Executing zero scenarios is unconditionally a failure, whatever the
+floor is set to.
+
+Skipped scenarios are reported separately and never fail the run on their
+own — so a CI gate is simply:
 
 ```bash
 bun run ftest -- run --include-tag migration-ready
 ```
+
+**This gate keeps its configured floor.** Narrowing the suite with
+`--include-tag`/`--exclude-tag` (or a mode filter) does not suspend the
+scenario floor — `min_scenarios` still applies to the narrowed set. That is
+deliberate: a renamed or emptied tag must not silently shrink `migration-ready`
+from 70 scenarios to 3, or to 0, and still exit 0. Set `min_scenarios` (or
+pass `--min-scenarios`) to the count you actually expect this gate to select.
 
 ## Safety gates
 
@@ -52,7 +96,12 @@ Scenarios may be skipped (not failed) by a safety gate:
 
 A skipped scenario imposes no base-URL requirement, so a guarded scenario does
 not force config it never uses. A skip counts only under the `skipped`
-summary counter — never `passed` — and never fails the run by itself.
+summary counter — never `passed` — and never increments `failed`. It can still
+end the run non-zero, though, because a skipped scenario is **excluded from
+`executed`**: any skip lowers the floor's numerator, so a run that skips its way
+below `min_scenarios` exits `20`. A scenario named by `--scenario` is only the
+guaranteed case — it executed nothing at all, and naming a scenario is the
+statement that it must run.
 
 ### `environment: production` is fail-closed
 
@@ -75,6 +124,52 @@ pointing a non-production run at a production host: if any configured base
 URL's lowercase hostname matches a pattern while `environment != production`,
 `run`/`record` abort with a config error before any request is issued.
 `validate` never sends a request, so the guard doesn't apply there.
+
+## `record` has its own floor
+
+`record` always narrows a run to `legacy_record` scenarios, so every other
+scenario in the corpus lands in `filtered` by construction and can never be
+`executed`. That narrowing is the command's definition, not an operator's
+filter — unlike a tag or mode filter someone chose, it cannot drift — so the
+rule above ("narrowing keeps the configured floor") does not apply to it.
+`record` instead evaluates against its own floor of **at most 1**
+(`min(min_scenarios, 1)`): a repository gating CI at `min_scenarios: 20` does
+not get exit 20 from every `pharos record` just because the corpus has fewer
+than 20 `legacy_record` scenarios. Recording nothing at all is still exit 20
+(rule 1 above still applies), and a named `--scenario` still has to execute
+(rule 2). An operator who wants a specific size assertion on a recording run
+states it explicitly with `--min-scenarios <n>`, which `record` honors
+verbatim.
+
+## What a complete run needs
+
+Pharos has no `pharos doctor` and does not preflight the environment. A
+missing `legacy_base_url`/`new_base_url` for a selected mode fails with an
+actionable message — checked after discovery, filtering and the safety gates,
+so a scenario that is skipped never forces config it would not have used, and
+before any selected scenario issues a request, and a missing template variable
+(e.g. `{{ env.TEST_USER_EMAIL }}`) fails loudly the moment a step tries to
+substitute it, marking that scenario `pass: false`. Both are loud failures,
+not silent ones — pharos#12's design point was never "a bad environment goes
+unnoticed", it was that a misconfigured or narrowed **scenario directory**
+could quietly shrink the run itself and still exit 0.
+
+So, when checking whether a run actually exercised the suite you think it
+did:
+
+- **Read `summary.discovered`, not the pass fraction.** `73 passed, 0 failed`
+  looks identical whether the run discovered 73 scenarios or 730 and only
+  executed a tenth of them — `discovered` is the run's real denominator;
+  `executed` is what got a chance to pass or fail.
+- **Pin `min_scenarios` in CI.** The default of `1` only guards against
+  discovering literally nothing. A repository with an 81-scenario corpus
+  should set `min_scenarios: 81` (or whatever floor it actually expects), so
+  an empty or misspelled `scenario_dir`, or a filter that quietly matches
+  nothing, exits **20** naming the cause instead of a clean 0 with
+  `0 discovered`.
+- **A tag- or mode-narrowed CI gate keeps its configured floor** — see above.
+  Narrowing the suite on purpose does not suspend the check that the narrowed
+  suite itself came back with enough scenarios.
 
 ## In CI
 

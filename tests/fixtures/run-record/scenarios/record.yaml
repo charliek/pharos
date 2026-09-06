@@ -1,0 +1,12 @@
+version: 1
+id: record.only
+name: the only recordable scenario
+service: s
+tags: [recording]
+mode: legacy_record
+steps:
+  - id: get
+    request: { method: GET, path: /ok }
+    recording:
+      fixture: record/only.json
+      safe_headers: [content-type]

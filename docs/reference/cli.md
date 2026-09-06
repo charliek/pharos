@@ -24,24 +24,39 @@ the [configuration reference](configuration.md).
 
 ```bash
 bun run ftest -- run [--config <path>] [--scenario <id>] \
-  [--include-tag <tag>...] [--exclude-tag <tag>...]
+  [--include-tag <tag>...] [--exclude-tag <tag>...] [--min-scenarios <n>]
 ```
 
 Discovers scenarios under `scenario_dir`, applies the filters and safety gates,
 runs each, and prints a console report. It also writes `report.json` and
-`junit.xml` to `report_dir`. Exits non-zero when any required scenario fails;
-skipped scenarios are reported separately and do not fail the run.
+`junit.xml` to `report_dir`. Skipped scenarios are reported separately and do
+not fail the run *on their own* — but a scenario named by `--scenario` that a
+safety gate skips has executed nothing, so the run misses its floor and exits
+`20` (see the exit codes below).
 
 | Option | Description |
 |---|---|
 | `-c, --config <path>` | Config file path (otherwise auto-discovered). |
-| `-s, --scenario <id>` | Run a single scenario by id. |
+| `-s, --scenario <id>` | Run a single scenario by id. Sets the scenario floor to 1 regardless of `min_scenarios`. |
 | `--include-tag <tag...>` | Only run scenarios carrying any of these tags. |
 | `--exclude-tag <tag...>` | Skip scenarios carrying any of these tags. |
+| `--min-scenarios <n>` | Override `min_scenarios` for this invocation. A non-negative integer no larger than `Number.MAX_SAFE_INTEGER`; anything else (including a floor too large to represent exactly) is a config error. |
 
 `compare_live` and `legacy_record` need `legacy_base_url`; `compare_live`,
 `new_only_assert`, and `replay_against_recording` need `new_base_url`. A missing
 base URL for a selected mode fails fast with an actionable message.
+
+**Exit codes:**
+
+| Exit | Meaning |
+|---|---|
+| `0` | All selected required scenarios passed, and the scenario floor (`min_scenarios`) was met. |
+| `1` | At least one required scenario failed (a production refusal counts as a failure), or the command refused before running any scenario (invalid config, malformed `MIN_SCENARIOS`/`--min-scenarios`, or `record` refused in CI) — a refusal never reaches the floor. |
+| `20` | The scenario floor was not met — takes precedence over `1`. Names the cause (missing/empty/unreadable `scenario_dir`, a filter that matched nothing, a named `--scenario` that a safety gate skipped, etc.). |
+
+See [reporting & CI](../guides/reporting-and-ci.md#exit-codes) for the full
+rules (what counts toward `executed`, and how narrowing interacts with the
+floor).
 
 ## `validate`
 
@@ -58,12 +73,37 @@ Failures name the file **and** the field path. Exits non-zero on any error.
 ## `record`
 
 ```bash
-bun run ftest -- record [--config <path>] [--scenario <id>]
+bun run ftest -- record [--config <path>] [--scenario <id>] [--min-scenarios <n>]
 ```
 
 Runs `legacy_record` scenarios with recording **enabled**, writing redacted
 fixtures under `fixture_dir`. This is the explicit opt-in that allows recordings
 to be written; it is refused in CI by default unless `ALLOW_RECORDING_UPDATES=true`.
+
+| Option | Description |
+|---|---|
+| `-c, --config <path>` | Config file path (otherwise auto-discovered). |
+| `-s, --scenario <id>` | Record a single scenario by id. Sets the floor to 1. |
+| `--min-scenarios <n>` | Overrides `record`'s own floor (see below) with this exact value. |
+
+`record` narrows every invocation to `legacy_record` scenarios by construction,
+so — unlike `run` — it does **not** gate on the suite-wide `min_scenarios`.
+Its narrowing is the command's definition, not an operator's filter, so it
+evaluates against a floor of `min(min_scenarios, 1)` instead: a repository
+gating CI at `min_scenarios: 20` does not get exit 20 from every
+`pharos record` just because the corpus has fewer than 20 `legacy_record`
+scenarios. Recording zero scenarios is still exit 20. An operator who wants a
+specific size assertion on a recording run passes `--min-scenarios <n>`
+explicitly, honored verbatim. See
+[reporting & CI](../guides/reporting-and-ci.md#record-has-its-own-floor).
+
+**Exit codes:**
+
+| Exit | Meaning |
+|---|---|
+| `0` | The floor was met and every scenario that ran recorded/passed cleanly. |
+| `1` | The floor was met but at least one scenario failed — or the command refused before running any scenario at all (invalid config, malformed `MIN_SCENARIOS`/`--min-scenarios`, or `record` refused in CI without `ALLOW_RECORDING_UPDATES`), in which case the floor was never evaluated. |
+| `20` | `record`'s floor was not met (e.g. the corpus has no `legacy_record` scenarios, or a named `--scenario` did not execute) — takes precedence over `1`. |
 
 ## `check-contract`
 

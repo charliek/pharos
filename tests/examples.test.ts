@@ -54,8 +54,8 @@ describe('example scenarios', () => {
       NEW_BASE_URL: newService?.url,
     } as NodeJS.ProcessEnv;
 
-    const results = await runProject(exampleConfig(), { env });
-    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z');
+    const { results, accounting } = await runProject(exampleConfig(), { env });
+    const report = buildReport(results, '2024-01-01T00:00:00Z', '2024-01-01T00:00:01Z', accounting);
 
     // The seven required example scenarios (spec Section 15.2), plus the
     // cookie-jar/set_cookie session flow and the location-comparison redirect
@@ -77,7 +77,7 @@ describe('example scenarios', () => {
       LEGACY_BASE_URL: legacy?.url,
       NEW_BASE_URL: newService?.url,
     } as NodeJS.ProcessEnv;
-    const results = await runProject(exampleConfig(), {
+    const { results } = await runProject(exampleConfig(), {
       scenarioId: 'users.create-then-fetch-destructive',
       env,
     });

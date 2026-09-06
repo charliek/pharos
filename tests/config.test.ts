@@ -1,4 +1,6 @@
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { defaultConfig, loadConfig } from '../src/config/config';
@@ -60,6 +62,58 @@ describe('configFromEnv', () => {
     expect(() => configFromEnv({ PHAROS_ENVIRONMENT: '' } as NodeJS.ProcessEnv)).toThrow(
       ConfigError,
     );
+  });
+
+  it('projects MIN_SCENARIOS as the run floor, including the 0 opt-out', () => {
+    expect(configFromEnv({ MIN_SCENARIOS: '3' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: 3,
+    });
+    expect(configFromEnv({ MIN_SCENARIOS: '0' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: 0,
+    });
+    expect(configFromEnv({ MIN_SCENARIOS: '  5  ' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: 5,
+    });
+  });
+
+  it('fails closed (ConfigError) on a garbage MIN_SCENARIOS rather than defaulting to 1', () => {
+    // A floor that silently became the default would be a fresh false green —
+    // the exact failure mode the floor exists to catch (pharos#12).
+    for (const value of ['abc', '-1', '1.5', '', '  ']) {
+      expect(() => configFromEnv({ MIN_SCENARIOS: value } as NodeJS.ProcessEnv)).toThrow(
+        ConfigError,
+      );
+    }
+    try {
+      configFromEnv({ MIN_SCENARIOS: 'abc' } as NodeJS.ProcessEnv);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ConfigError).message).toContain('MIN_SCENARIOS');
+      expect((error as ConfigError).message).toContain('abc');
+    }
+  });
+
+  it('refuses a MIN_SCENARIOS floor it cannot represent exactly, at the boundary', () => {
+    // `99999999999999999999` passes a digits-only test and becomes 1e20 — a
+    // floor the runtime cannot count to. It fails closed as an unmeetable floor
+    // either way, but a number pharos cannot represent is refused where it is
+    // stated, naming the value, rather than silently gated on an approximation.
+    expect(configFromEnv({ MIN_SCENARIOS: '9007199254740991' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: Number.MAX_SAFE_INTEGER,
+    });
+    for (const value of ['9007199254740992', '99999999999999999999']) {
+      expect(() => configFromEnv({ MIN_SCENARIOS: value } as NodeJS.ProcessEnv)).toThrow(
+        ConfigError,
+      );
+    }
+    try {
+      configFromEnv({ MIN_SCENARIOS: '99999999999999999999' } as NodeJS.ProcessEnv);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ConfigError).message).toContain('MIN_SCENARIOS');
+      expect((error as ConfigError).message).toContain('99999999999999999999');
+      expect((error as ConfigError).message).toContain(String(Number.MAX_SAFE_INTEGER));
+    }
   });
 
   it('trims surrounding whitespace before validating PHAROS_ENVIRONMENT', () => {
@@ -155,6 +209,35 @@ describe('loadConfig precedence (defaults < file < env < overrides)', () => {
     expect(config.legacy_base_url).toBe('http://override-legacy');
   });
 
+  it('reads min_scenarios from the config file, with env and overrides winning in turn', () => {
+    const fromFile = loadConfig({
+      configPath: resolve(here, 'fixtures/config/pharos.config.min-scenarios.json'),
+      env: {},
+      cwd: here,
+    });
+    expect(fromFile.min_scenarios).toBe(7);
+
+    const fromEnv = loadConfig({
+      configPath: resolve(here, 'fixtures/config/pharos.config.min-scenarios.json'),
+      env: { MIN_SCENARIOS: '9' } as NodeJS.ProcessEnv,
+      cwd: here,
+    });
+    expect(fromEnv.min_scenarios).toBe(9);
+
+    const overridden = loadConfig({
+      configPath: resolve(here, 'fixtures/config/pharos.config.min-scenarios.json'),
+      env: { MIN_SCENARIOS: '9' } as NodeJS.ProcessEnv,
+      overrides: { min_scenarios: 2 },
+      cwd: here,
+    });
+    expect(overridden.min_scenarios).toBe(2);
+  });
+
+  it('defaults the run floor to one executed scenario', () => {
+    expect(loadConfig({ env: {}, cwd: here }).min_scenarios).toBe(1);
+    expect(defaultConfig().min_scenarios).toBe(1);
+  });
+
   it('resolves directory fields to absolute paths', () => {
     const config = loadConfig({ env: {}, cwd: here });
     expect(config.scenario_dir.startsWith('/')).toBe(true);
@@ -167,5 +250,19 @@ describe('defaultConfig', () => {
     const a = defaultConfig();
     a.redaction.headers.push('mutated');
     expect(defaultConfig().redaction.headers).not.toContain('mutated');
+  });
+
+  it('refuses a config-file floor beyond the safe integer range', () => {
+    // The two string-parsing entry points reject an unrepresentable floor; a
+    // config file must not be the door left open. zod's `.int()` alone is
+    // `Number.isInteger`, which accepts 1e20.
+    const dir = mkdtempSync(join(tmpdir(), 'pharos-cfg-floor-'));
+    const file = join(dir, 'pharos.config.json');
+    writeFileSync(file, JSON.stringify({ min_scenarios: 1e20 }));
+    expect(() => loadConfig({ configPath: file, cwd: dir, env: {} })).toThrow();
+    writeFileSync(file, JSON.stringify({ min_scenarios: Number.MAX_SAFE_INTEGER }));
+    expect(loadConfig({ configPath: file, cwd: dir, env: {} }).min_scenarios).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
   });
 });

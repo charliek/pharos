@@ -40,6 +40,11 @@ describe('public barrel (src/index.ts)', () => {
     expect(config.scenario_dir).toBe('./scenarios');
     expect(config.hooks_module).toBe('./hooks/index.ts');
 
+    // Exported alongside PharosConfig: the resolved type now *requires*
+    // min_scenarios, so a consumer hand-building a config literal needs the
+    // default to be reachable in one line.
+    expect(pharos.DEFAULT_MIN_SCENARIOS).toBe(config.min_scenarios);
+
     const override: pharos.ConfigOverride = { legacy_base_url: 'http://legacy' };
     const redaction: pharos.RedactionTargets = config.redaction;
     const loadOptions: pharos.LoadConfigOptions = { overrides: override };

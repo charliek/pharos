@@ -67,6 +67,8 @@ describe('scaffoldProject — the init file set', () => {
     expect(config.hooks_module).toBe('./hooks/index.ts');
     expect(config.environment).toBe('local');
     expect(config.production_url_patterns).toEqual([]);
+    // The floor that can exit the run 20 is scaffolded, not left implicit.
+    expect(config.min_scenarios).toBe(1);
     expect(config.redaction.headers).toContain('authorization');
     // Safety toggles stay out of the generated file — see src/scaffold.ts.
     expect(config.allow_destructive_tests).toBeUndefined();

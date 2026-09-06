@@ -114,6 +114,10 @@ function configTemplate(): string {
     output_mode: defaults.output_mode,
     environment: defaults.environment,
     production_url_patterns: defaults.production_url_patterns,
+    // Scaffolded explicitly: `min_scenarios` can exit the run 20, so a config
+    // that never mentions it hides the setting an operator has to raise once
+    // the suite grows (spec Section 11.5).
+    min_scenarios: defaults.min_scenarios,
     redaction: defaults.redaction,
   };
   return `${JSON.stringify(config, null, 2)}\n`;
