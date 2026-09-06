@@ -6,7 +6,7 @@ import { renderConsoleReport } from '../reporting/console-reporter';
 import { writeJsonReport } from '../reporting/json-reporter';
 import { writeJunitReport } from '../reporting/junit-reporter';
 import { buildReport, exitCodeFor } from '../reporting/report';
-import { printFileIssues, writeStream } from './util';
+import { parseMinScenarios, printFileIssues, writeStream } from './util';
 
 interface RunOptions {
   config?: string;
@@ -14,22 +14,6 @@ interface RunOptions {
   includeTag?: string[];
   excludeTag?: string[];
   minScenarios?: string;
-}
-
-/**
- * Parse `--min-scenarios`. Fails closed like the `MIN_SCENARIOS` env var: a
- * garbage floor that silently became the default would reintroduce exactly the
- * false green the floor exists to catch.
- */
-function parseMinScenarios(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new ConfigError([
-      `--min-scenarios must be a non-negative integer (got ${JSON.stringify(value)})`,
-    ]);
-  }
-  return Number(trimmed);
 }
 
 /**

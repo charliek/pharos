@@ -7,7 +7,8 @@ import { ValidationError, validateWithSchema } from '../errors';
 import { configFromEnv } from './env';
 
 /**
- * Pharos configuration (spec Section 6). Field names are snake_case to match the
+ * Pharos configuration (spec Section 6): the shape of `pharos.config.json`/`.yaml`
+ * **once loaded**, every field resolved. Field names are snake_case to match the
  * config file and the documented environment variables. Loading is layered:
  * defaults < config file < environment < CLI overrides. Mode-aware *semantic*
  * validation (e.g. compare_live needs both base URLs) is applied at run time by
@@ -53,6 +54,16 @@ export interface PharosConfig {
    * The run's scenario floor (spec Section 11.5): how many scenarios must
    * actually *execute* for the run to be trustworthy. Mirrors limen's
    * `min_comparisons`.
+   *
+   * **Required, like every other field on this interface.** `PharosConfig` is
+   * the config *once loaded* (see the module docstring), where every field has
+   * been resolved from defaults < file < env < CLI; the partial input shape is
+   * {@link ConfigOverride}, and the default is {@link DEFAULT_MIN_SCENARIOS}.
+   * Making the floor optional here would let a programmatic driver hand
+   * `runProject` a config with no floor at all — a run with no denominator,
+   * which is the hole this field closes. Adding it was a deliberate breaking
+   * change for a consumer hand-building a loaded-config literal; spread
+   * `defaultConfig()` instead of listing fields.
    *
    * **`0` and `1` behave identically.** `0` nominally opts out of the minimum,
    * but never out of the zero-execution guard — a run that executed nothing is

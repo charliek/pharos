@@ -306,7 +306,13 @@ describe('an unmet floor in JUnit', () => {
   it('reports an error on both elements and counts the synthetic testcase', () => {
     const xml = renderJunitXml(report);
     // `tests` has to match the number of <testcase> elements, or CI's own
-    // arithmetic disagrees with the file it is reading.
+    // arithmetic disagrees with the file it is reading — so COUNT the elements.
+    // Asserting `tests="2"` and the synthetic case's presence separately does
+    // not pin that: dropping the real skipped testcase leaves both true.
+    const declared = Number(/<testsuites tests="(\d+)"/.exec(xml)?.[1]);
+    expect(declared).toBe(2);
+    expect(xml.match(/<testcase\b/g) ?? []).toHaveLength(declared);
+    expect(xml).toContain('<testcase name="skipped" classname="pharos"><skipped');
     expect(xml).toContain('<testsuites tests="2" failures="0" errors="1" skipped="1">');
     expect(xml).toContain(
       '<testsuite name="pharos [narrowed: --include-tag smoke]" tests="2" failures="0" errors="1" skipped="1"',

@@ -1,6 +1,6 @@
 import type { Mismatch } from '../comparison/result';
 import { DEFAULT_MIN_SCENARIOS, type PharosConfig } from '../config/config';
-import type { RunAccounting } from '../execution/run-all';
+import { assertAccounting, type RunAccounting } from '../execution/run-all';
 import type { ScenarioResult } from '../execution/runner';
 
 /**
@@ -185,48 +185,16 @@ export function evaluateRunFloor(
 }
 
 /**
- * The accounting invariants (spec Section 11.5): every discovered file has
- * exactly one terminal classification, and every classification that produces a
- * result produced one. A violation means a code path dropped a scenario without
- * counting it — a tool bug, not an operator error, so it throws rather than
- * reporting a smaller denominator.
- */
-function assertAccounting(accounting: RunAccounting, resultCount: number): void {
-  const classified =
-    accounting.parseFailed +
-    accounting.filteredByMode +
-    accounting.filteredByFilter +
-    accounting.safetySkipped +
-    accounting.refused +
-    accounting.executed;
-  const reported =
-    accounting.parseFailed + accounting.safetySkipped + accounting.refused + accounting.executed;
-  const problems: string[] = [];
-  if (classified !== accounting.discovered) {
-    problems.push(
-      `${accounting.discovered} scenario file(s) discovered but ${classified} classified ` +
-        `(parseFailed ${accounting.parseFailed}, filteredByMode ${accounting.filteredByMode}, ` +
-        `filteredByFilter ${accounting.filteredByFilter}, safetySkipped ${accounting.safetySkipped}, ` +
-        `refused ${accounting.refused}, executed ${accounting.executed})`,
-    );
-  }
-  if (reported !== resultCount) {
-    problems.push(`${resultCount} result(s) reported but ${reported} classifications produce one`);
-  }
-  if (problems.length > 0) {
-    throw new Error(
-      `pharos accounting invariant violated — this is a tool bug: ${problems.join('; ')}`,
-    );
-  }
-}
-
-/**
  * Build the run report. `accounting` is required and must be the counted one
  * `runProject` returned: a synthesized fallback (discovered = results.length,
- * everything else derived) reduces both invariants above to
+ * everything else derived) reduces both accounting invariants to
  * `results.length === results.length` — the tautology this design exists to
  * remove — and would count parse failures and refusals as `executed`, which the
  * floor's numerator forbids.
+ *
+ * {@link assertAccounting} lives in `run-all.ts` and already ran there, on the
+ * accounting this is handed. Re-asserting is defence in depth for a caller that
+ * assembled one itself.
  */
 export function buildReport(
   results: ScenarioResult[],

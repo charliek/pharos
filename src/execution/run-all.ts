@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import type { PharosConfig } from '../config/config';
 import { assertConfigForModes, assertProductionUrlGuard } from '../config/validate';
 import { ContractRegistry } from '../contract/load';
@@ -90,6 +90,50 @@ export interface ProjectRun {
   accounting: RunAccounting;
 }
 
+/**
+ * The accounting invariants (spec Section 11.5): every discovered file has
+ * exactly one terminal classification, and every classification that produces a
+ * result produced one. A violation means a code path dropped a scenario without
+ * counting it — a tool bug, not an operator error, so it throws rather than
+ * reporting a smaller denominator.
+ *
+ * Asserted here, at the end of {@link runProject}, and *again* in
+ * `buildReport`. The second call is defence in depth for a caller that builds a
+ * report from an accounting it assembled itself; the first is the one that
+ * covers `record`, which never builds a report — and `record` is the only
+ * command that supplies a mode filter, so it is precisely where a drop path
+ * that forgot to count `filteredByMode` (or counted it twice) would otherwise
+ * be invisible.
+ */
+export function assertAccounting(accounting: RunAccounting, resultCount: number): void {
+  const classified =
+    accounting.parseFailed +
+    accounting.filteredByMode +
+    accounting.filteredByFilter +
+    accounting.safetySkipped +
+    accounting.refused +
+    accounting.executed;
+  const reported =
+    accounting.parseFailed + accounting.safetySkipped + accounting.refused + accounting.executed;
+  const problems: string[] = [];
+  if (classified !== accounting.discovered) {
+    problems.push(
+      `${accounting.discovered} scenario file(s) discovered but ${classified} classified ` +
+        `(parseFailed ${accounting.parseFailed}, filteredByMode ${accounting.filteredByMode}, ` +
+        `filteredByFilter ${accounting.filteredByFilter}, safetySkipped ${accounting.safetySkipped}, ` +
+        `refused ${accounting.refused}, executed ${accounting.executed})`,
+    );
+  }
+  if (reported !== resultCount) {
+    problems.push(`${resultCount} result(s) reported but ${reported} classifications produce one`);
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `pharos accounting invariant violated — this is a tool bug: ${problems.join('; ')}`,
+    );
+  }
+}
+
 /** Render the narrowing in effect for reports and floor messages. */
 function describeNarrowing(options: RunProjectOptions): string[] {
   const narrowed: string[] = [];
@@ -101,6 +145,26 @@ function describeNarrowing(options: RunProjectOptions): string[] {
 }
 
 /**
+ * Translate a filesystem errno into the directory state that names it, or
+ * rethrow. Every "the harness could not read the suite" outcome has to reach
+ * the floor as a named reason (spec Section 11.5, pharos#12): a raw errno
+ * escaping here exits 1 with a stack trace and no reports written, which is the
+ * one outcome this whole design exists to remove.
+ *
+ * The catch stays narrow on purpose. `ENOENT` (gone), `ENOTDIR` (a path
+ * component is a file) and `EACCES`/`EPERM` (a wrong-uid volume mount) are the
+ * three ways a suite can be unreadable; anything else — `EMFILE`, `ELOOP`, a
+ * bug — is not a statement about the operator's directory and stays loud.
+ */
+function directoryStateForError(error: unknown): ScenarioDirState {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ENOENT') return 'missing';
+  if (code === 'ENOTDIR') return 'not-a-directory';
+  if (code === 'EACCES' || code === 'EPERM') return 'unreadable';
+  throw error;
+}
+
+/**
  * Classify the resolved scenario directory, then discover the scenario files in
  * it. Classification happens here rather than in `discoverScenarioFiles`, whose
  * contract ("a missing directory simply yields no files") is shared with
@@ -109,26 +173,32 @@ function describeNarrowing(options: RunProjectOptions): string[] {
  * `scenario_dir` pointing at one is an operator mistake that deserves a named
  * state rather than a stack trace.
  *
- * A directory the process cannot *read* is the same class of mistake — a
- * container mounting the scenario volume with the wrong uid — and fast-glob
- * raises a bare `EACCES: permission denied, scandir …` for it, which would
- * exit 1 with no report written. It is "the harness could not read the suite",
- * so it becomes a fifth state and a floor outcome like the other four. Only
- * the permission errnos are absorbed: anything else from discovery is a bug or
- * an exhausted resource, and stays loud.
+ * **One `statSync`, not `existsSync` then `statSync`.** The two-call form had
+ * three holes, all of which turned "could not read the suite" back into a bare
+ * errno and exit 1 — the floor bypassed, no reports written:
+ *   - an unreadable *parent* makes `existsSync` return false, so the run
+ *     blamed a directory that exists and is simply not reachable;
+ *   - a directory removed between the two calls threw `ENOENT` from `statSync`;
+ *   - a directory replaced by a file after `statSync` threw `ENOTDIR` from
+ *     discovery.
+ * A single stat closes the first and second; translating discovery's errnos
+ * through the same table closes the third and the residual race the stat itself
+ * cannot close (the directory can always vanish between stat and readdir).
  */
 function discoverWithState(dir: string): { files: string[]; state: ScenarioDirState } {
-  if (!existsSync(dir)) return { files: [], state: 'missing' };
-  if (!statSync(dir).isDirectory()) return { files: [], state: 'not-a-directory' };
-  let files: string[];
+  let isDirectory: boolean;
   try {
-    files = discoverScenarioFiles(dir);
+    isDirectory = statSync(dir).isDirectory();
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code !== 'EACCES' && code !== 'EPERM') throw error;
-    return { files: [], state: 'unreadable' };
+    return { files: [], state: directoryStateForError(error) };
   }
-  return { files, state: files.length > 0 ? 'ok' : 'empty' };
+  if (!isDirectory) return { files: [], state: 'not-a-directory' };
+  try {
+    const files = discoverScenarioFiles(dir);
+    return { files, state: files.length > 0 ? 'ok' : 'empty' };
+  } catch (error) {
+    return { files: [], state: directoryStateForError(error) };
+  }
 }
 
 /**
@@ -369,5 +439,9 @@ export async function runProject(
       }),
     );
   }
+  // The denominator is checked here, not only where a report is built:
+  // `record` gates on `evaluateRunFloor` without ever calling `buildReport`,
+  // and it is the one command with a mode filter to miscount.
+  assertAccounting(accounting, results.length);
   return { results, accounting };
 }

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -276,6 +276,39 @@ describe('the run scenario floor', () => {
     expect(run.summary.floor.reason).toContain('is not a directory');
   });
 
+  // Root reads a 0o000 directory regardless, so the case cannot be produced.
+  it.skipIf(process.getuid?.() === 0)(
+    'says the scenario_dir is unreadable, not missing, when its parent cannot be read',
+    async () => {
+      // `existsSync` returns false for a directory behind an unreadable parent,
+      // so the run used to report "does not exist" about a directory that does.
+      // One `statSync` in a try/catch tells the two apart by errno.
+      const parent = mkdtempSync(join(tmpdir(), 'pharos-closed-parent-'));
+      const suite = join(parent, 'scenarios');
+      mkdirSync(suite);
+      chmodSync(parent, 0o000);
+      try {
+        const run = await report(config({ scenario_dir: suite }));
+        expect(exitCodeFor(run)).toBe(20);
+        expect(run.summary.floor.reason).toContain(suite);
+        expect(run.summary.floor.reason).toContain('is not readable (permission denied)');
+        expect(run.summary.floor.reason).not.toContain('does not exist');
+      } finally {
+        chmodSync(parent, 0o700);
+      }
+    },
+  );
+
+  it('exits 20 when a path component of the scenario_dir is a file (ENOTDIR)', async () => {
+    // `existsSync` returns false here too, so this also used to read as "does
+    // not exist"; the stat's errno names it. The same errno reaches the same
+    // state when the directory is replaced by a file mid-run — see
+    // tests/run-discovery-faults.test.ts.
+    const run = await report(config({ scenario_dir: join(notADirectory, 'nested') }));
+    expect(exitCodeFor(run)).toBe(20);
+    expect(run.summary.floor.reason).toContain('is not a directory');
+  });
+
   it('exits 20 naming the filter when a tag filter matches nothing', async () => {
     const run = await report(config(), { includeTags: ['no-such-tag'] });
     expect(exitCodeFor(run)).toBe(20);
@@ -332,13 +365,27 @@ describe('the run scenario floor', () => {
 
   it('keeps the floor on a tag-narrowed run and shows the narrowing everywhere', async () => {
     await startServers();
-    const run = await report(config({ min_scenarios: 1 }), { includeTags: ['smoke'] });
-    expect(exitCodeFor(run)).toBe(0);
+    // The floor must EXCEED what the narrowed run can execute, or the case is
+    // decoration: with `min_scenarios: 1` and one scenario executed it passes
+    // whether the floor survived the narrowing or was reset to 1 — which is the
+    // exact regression this test exists to forbid (`--include-tag` is the docs'
+    // recommended CI gate, so a renamed tag must not quietly shrink the suite).
+    const run = await report(config({ min_scenarios: 2 }), { includeTags: ['smoke'] });
+    expect(run.summary.executed).toBe(1);
+    expect(run.summary.floor.applied).toBe(2);
+    expect(run.summary.floor.met).toBe(false);
+    expect(exitCodeFor(run)).toBe(20);
     const console = renderConsoleReport(run);
     expect(console).toContain('2 discovered · 1 executed · 1 passed · 0 failed · 0 skipped');
     expect(console).toContain('1 filtered (--include-tag smoke)');
     // CI listings hide properties, so the narrowing is in the suite name too.
     expect(renderJunitXml(run)).toContain('name="pharos [narrowed: --include-tag smoke]"');
+
+    // …and the floor is a floor, not a blanket refusal of narrowed runs: the
+    // same narrowing under a floor it does meet is a clean 0.
+    const met = await report(config({ min_scenarios: 1 }), { includeTags: ['smoke'] });
+    expect(met.summary.floor.applied).toBe(1);
+    expect(exitCodeFor(met)).toBe(0);
   });
 
   it('counts a mode filter separately from a tag filter', async () => {

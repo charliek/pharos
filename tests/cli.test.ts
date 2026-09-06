@@ -193,6 +193,33 @@ describe('the real process exit code (subprocess)', () => {
     expect(proc.stdout).toContain('1 recording(s) written');
   });
 
+  it("lets --min-scenarios override `record`'s own floor", async () => {
+    // record's floor of at most 1 is a deliberate exception (its narrowing is
+    // the command's definition, not an operator's filter), but it is not a
+    // silent rewrite of the operator's intent: an operator who does want a size
+    // assertion on a recording run says so, and the flag is honoured verbatim.
+    server = await startTestServer((_r, res) => replyJson(res, 200, { id: 1 }));
+    const { config } = writeConfig({
+      scenario_dir: resolve(here, 'fixtures/run-record/scenarios'),
+      legacy_base_url: server.url,
+    });
+    const proc = await runCliAsync(['record', '-c', config, '--min-scenarios', '3']);
+
+    expect(proc.status).toBe(20);
+    expect(proc.stdout).toContain('4 discovered · 3 filtered · 1 executed');
+    expect(proc.stderr).toContain('run floor not met');
+    expect(proc.stderr).toContain('below the floor of 3');
+  });
+
+  it('rejects a garbage --min-scenarios on `record` too', () => {
+    const { config } = writeConfig({
+      scenario_dir: resolve(here, 'fixtures/run-record/scenarios'),
+    });
+    const proc = runCli(['record', '-c', config, '--min-scenarios', '1.5']);
+    expect(proc.status).toBe(1);
+    expect(proc.stderr).toContain('--min-scenarios');
+  });
+
   it('exits 20 and still writes the reports when --scenario resolves to nothing', () => {
     // The pre-fix path threw ConfigError → exit 1 *before any report was
     // written*, so a CI job publishing reports/junit.xml republished the

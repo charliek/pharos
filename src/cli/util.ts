@@ -1,5 +1,23 @@
 import { relative } from 'node:path';
-import type { FieldIssue } from '../errors';
+import { ConfigError, type FieldIssue } from '../errors';
+
+/**
+ * Parse `--min-scenarios`, shared by `run` and `record`. Fails closed like the
+ * `MIN_SCENARIOS` env var: a garbage floor that silently became the default
+ * would reintroduce exactly the false green the floor exists to catch.
+ * `undefined` means the flag was not given — which is not the same as `0`, and
+ * `record` distinguishes them (see `record.ts`).
+ */
+export function parseMinScenarios(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new ConfigError([
+      `--min-scenarios must be a non-negative integer (got ${JSON.stringify(value)})`,
+    ]);
+  }
+  return Number(trimmed);
+}
 
 /** Shorten an absolute path to a cwd-relative one for readable CLI output. */
 export function relativePath(file: string): string {

@@ -1,13 +1,14 @@
 import type { Command } from 'commander';
-import { loadConfig } from '../config/config';
+import { type ConfigOverride, loadConfig } from '../config/config';
 import { ConfigError, ValidationError } from '../errors';
 import { runProject } from '../execution/run-all';
 import { evaluateRunFloor } from '../reporting/report';
-import { printFileIssues, relativePath, writeStream } from './util';
+import { parseMinScenarios, printFileIssues, relativePath, writeStream } from './util';
 
 interface RecordOptions {
   config?: string;
   scenario?: string;
+  minScenarios?: string;
 }
 
 /**
@@ -18,9 +19,10 @@ interface RecordOptions {
  * `record` narrows the run to `legacy_record`, so it is exactly the command
  * that can quietly record nothing (a corpus with no `legacy_record` scenarios
  * used to print "0 recording(s) written" and exit 0). It prints the same
- * accounting `run` does and gates on the same {@link evaluateRunFloor} — but
- * on its own floor of at most 1, never the suite-wide `min_scenarios`; see the
- * call site for why.
+ * accounting `run` does and gates on the same {@link evaluateRunFloor} — but on
+ * its own floor of at most 1 rather than the suite-wide `min_scenarios`, unless
+ * `--min-scenarios` says otherwise; see the call site for the rule and its
+ * reason.
  */
 export function registerRecordCommand(program: Command): void {
   program
@@ -28,9 +30,16 @@ export function registerRecordCommand(program: Command): void {
     .description('Record legacy interactions into fixtures (explicit opt-in)')
     .option('-c, --config <path>', 'path to the pharos config file')
     .option('-s, --scenario <id>', 'record a single scenario by id')
+    .option(
+      '--min-scenarios <n>',
+      "fail (exit 20) unless at least n scenarios record; overrides record's own floor",
+    )
     .action(async (options: RecordOptions) => {
       try {
-        const config = loadConfig({ configPath: options.config });
+        const minScenarios = parseMinScenarios(options.minScenarios);
+        const overrides: ConfigOverride | undefined =
+          minScenarios === undefined ? undefined : { min_scenarios: minScenarios };
+        const config = loadConfig({ configPath: options.config, overrides });
         // CI refuses recording updates by default (spec Section 10.2).
         if (config.output_mode === 'ci' && !config.allow_recording_updates) {
           process.stderr.write(
@@ -69,18 +78,28 @@ export function registerRecordCommand(program: Command): void {
             `${accounting.executed} executed · ${written} recording(s) written; ` +
             `${failed} scenario(s) failed.\n`,
         );
-        // `record`'s floor is at most 1, and deliberately NOT the suite-wide
-        // `min_scenarios`. Rule 3 applies the configured minimum to a narrowed
-        // run so that a renamed tag cannot silently shrink an operator's
-        // filter — but `record`'s narrowing is the command's definition, not an
-        // operator's filter: it always runs `modes: ['legacy_record']`, so every
-        // other scenario lands in `filteredByMode` and can never be in
-        // `executed`. A repo that sets `min_scenarios: 20` to gate CI would make
-        // every `pharos record` exit 20, with no `--min-scenarios` on `record`
-        // to escape it. Rules 1 (recorded nothing → 20) and 2 (`--scenario` must
-        // execute) still apply, and they are the whole guard record needs.
+        // THE RULE: `record`'s floor is `min(min_scenarios, 1)` — an explicit
+        // `--min-scenarios <n>` wins outright, at whatever value it names.
+        //
+        // THE REASON: rule 3 (spec Section 11.5) applies the configured minimum
+        // to a narrowed run so a renamed tag cannot silently shrink an
+        // operator's filter. `record`'s narrowing is not an operator's filter,
+        // it is the command's definition: it always runs
+        // `modes: ['legacy_record']`, so every other scenario lands in
+        // `filteredByMode` and can never be in `executed`. A hardcoded mode
+        // filter cannot drift the way a tag can, so rule 3 buys nothing here
+        // and costs everything: a repo gating CI at `min_scenarios: 20` would
+        // get exit 20 from every `pharos record` forever, and the only escape
+        // would be weakening the CI gate. Rules 1 (recorded nothing → 20) and 2
+        // (a named `--scenario` must execute) still apply, and they are the
+        // whole guard record needs.
+        //
+        // THE ESCAPE HATCH: this is a deliberate, documented exception rather
+        // than a silent rewrite — an operator who does want a size assertion on
+        // a recording run states it with `--min-scenarios <n>`, which is
+        // honoured verbatim (`--min-scenarios 20` gates record at 20).
         const floor = evaluateRunFloor(accounting, {
-          min_scenarios: Math.min(config.min_scenarios, 1),
+          min_scenarios: minScenarios ?? Math.min(config.min_scenarios, 1),
         });
         if (!floor.met) err.push(`✗ run floor not met: ${floor.reason}\n`);
         await writeStream(process.stdout, out.join(''));
