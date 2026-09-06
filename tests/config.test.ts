@@ -1,4 +1,6 @@
-import { dirname, resolve } from 'node:path';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { defaultConfig, loadConfig } from '../src/config/config';
@@ -88,6 +90,29 @@ describe('configFromEnv', () => {
     } catch (error) {
       expect((error as ConfigError).message).toContain('MIN_SCENARIOS');
       expect((error as ConfigError).message).toContain('abc');
+    }
+  });
+
+  it('refuses a MIN_SCENARIOS floor it cannot represent exactly, at the boundary', () => {
+    // `99999999999999999999` passes a digits-only test and becomes 1e20 — a
+    // floor the runtime cannot count to. It fails closed as an unmeetable floor
+    // either way, but a number pharos cannot represent is refused where it is
+    // stated, naming the value, rather than silently gated on an approximation.
+    expect(configFromEnv({ MIN_SCENARIOS: '9007199254740991' } as NodeJS.ProcessEnv)).toEqual({
+      min_scenarios: Number.MAX_SAFE_INTEGER,
+    });
+    for (const value of ['9007199254740992', '99999999999999999999']) {
+      expect(() => configFromEnv({ MIN_SCENARIOS: value } as NodeJS.ProcessEnv)).toThrow(
+        ConfigError,
+      );
+    }
+    try {
+      configFromEnv({ MIN_SCENARIOS: '99999999999999999999' } as NodeJS.ProcessEnv);
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ConfigError).message).toContain('MIN_SCENARIOS');
+      expect((error as ConfigError).message).toContain('99999999999999999999');
+      expect((error as ConfigError).message).toContain(String(Number.MAX_SAFE_INTEGER));
     }
   });
 
@@ -225,5 +250,19 @@ describe('defaultConfig', () => {
     const a = defaultConfig();
     a.redaction.headers.push('mutated');
     expect(defaultConfig().redaction.headers).not.toContain('mutated');
+  });
+
+  it('refuses a config-file floor beyond the safe integer range', () => {
+    // The two string-parsing entry points reject an unrepresentable floor; a
+    // config file must not be the door left open. zod's `.int()` alone is
+    // `Number.isInteger`, which accepts 1e20.
+    const dir = mkdtempSync(join(tmpdir(), 'pharos-cfg-floor-'));
+    const file = join(dir, 'pharos.config.json');
+    writeFileSync(file, JSON.stringify({ min_scenarios: 1e20 }));
+    expect(() => loadConfig({ configPath: file, cwd: dir, env: {} })).toThrow();
+    writeFileSync(file, JSON.stringify({ min_scenarios: Number.MAX_SAFE_INTEGER }));
+    expect(loadConfig({ configPath: file, cwd: dir, env: {} }).min_scenarios).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
   });
 });

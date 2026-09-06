@@ -44,13 +44,20 @@ export interface ReportScenario {
 
 /** The verdict of the run's scenario floor (spec Section 11.5). */
 export interface RunFloorResult {
-  /** The configured floor: `min_scenarios` / `MIN_SCENARIOS` / `--min-scenarios`. */
+  /**
+   * The floor this command handed the evaluator: `min_scenarios` /
+   * `MIN_SCENARIOS` / `--min-scenarios` for `run`; `record` substitutes its own
+   * (`min(min_scenarios, 1)`, or `--min-scenarios` verbatim — see `cli/record.ts`).
+   */
   minScenarios: number;
   /** The floor's numerator — scenarios that actually ran. */
   executed: number;
   /**
-   * The floor actually enforced: 1 for a `--scenario <id>` run (naming a
-   * scenario is the statement that it must run), otherwise `minScenarios`.
+   * The floor actually enforced — the effective floor after the
+   * command-specific rules and any explicit `--min-scenarios`: 1 for a
+   * `--scenario <id>` run (naming a scenario is the statement that it must
+   * run), otherwise `minScenarios`. Under `min_scenarios: 20` a `run` applies
+   * 20 and `record` applies 1 (3 with `record --min-scenarios 3`).
    */
   applied: number;
   met: boolean;

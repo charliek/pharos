@@ -30,7 +30,9 @@ bun run ftest -- run [--config <path>] [--scenario <id>] \
 Discovers scenarios under `scenario_dir`, applies the filters and safety gates,
 runs each, and prints a console report. It also writes `report.json` and
 `junit.xml` to `report_dir`. Skipped scenarios are reported separately and do
-not fail the run.
+not fail the run *on their own* — but a scenario named by `--scenario` that a
+safety gate skips has executed nothing, so the run misses its floor and exits
+`20` (see the exit codes below).
 
 | Option | Description |
 |---|---|
@@ -38,7 +40,7 @@ not fail the run.
 | `-s, --scenario <id>` | Run a single scenario by id. Sets the scenario floor to 1 regardless of `min_scenarios`. |
 | `--include-tag <tag...>` | Only run scenarios carrying any of these tags. |
 | `--exclude-tag <tag...>` | Skip scenarios carrying any of these tags. |
-| `--min-scenarios <n>` | Override `min_scenarios` for this invocation. A non-negative integer; anything else is a config error. |
+| `--min-scenarios <n>` | Override `min_scenarios` for this invocation. A non-negative integer no larger than `Number.MAX_SAFE_INTEGER`; anything else (including a floor too large to represent exactly) is a config error. |
 
 `compare_live` and `legacy_record` need `legacy_base_url`; `compare_live`,
 `new_only_assert`, and `replay_against_recording` need `new_base_url`. A missing

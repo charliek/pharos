@@ -1,22 +1,18 @@
 import { relative } from 'node:path';
-import { ConfigError, type FieldIssue } from '../errors';
+import { parseMinScenariosValue } from '../config/env';
+import type { FieldIssue } from '../errors';
 
 /**
- * Parse `--min-scenarios`, shared by `run` and `record`. Fails closed like the
- * `MIN_SCENARIOS` env var: a garbage floor that silently became the default
- * would reintroduce exactly the false green the floor exists to catch.
- * `undefined` means the flag was not given — which is not the same as `0`, and
- * `record` distinguishes them (see `record.ts`).
+ * Parse `--min-scenarios`, shared by `run` and `record`. The flag and the
+ * `MIN_SCENARIOS` env var are two spellings of one setting, so they go through
+ * one parser and fail closed on identical inputs — including a floor above
+ * `Number.MAX_SAFE_INTEGER`; see {@link parseMinScenariosValue} for the rule
+ * and its reason. `undefined` means the flag was not given — which is not the
+ * same as `0`, and `record` distinguishes them (see `record.ts`).
  */
 export function parseMinScenarios(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new ConfigError([
-      `--min-scenarios must be a non-negative integer (got ${JSON.stringify(value)})`,
-    ]);
-  }
-  return Number(trimmed);
+  return parseMinScenariosValue(value, '--min-scenarios');
 }
 
 /** Shorten an absolute path to a cwd-relative one for readable CLI output. */

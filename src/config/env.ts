@@ -8,6 +8,42 @@ function isValidEnvironment(value: string): value is Environment {
   return (VALID_ENVIRONMENTS as readonly string[]).includes(value);
 }
 
+/**
+ * Parse the run floor (Section 11.5) out of operator-supplied text — the one
+ * parser behind both spellings of the setting, `MIN_SCENARIOS` and
+ * `--min-scenarios` (see `cli/util.ts`). `source` names the spelling in the
+ * message so the same mistake reads the same way whichever way it was made.
+ *
+ * Fails closed, like `PHAROS_ENVIRONMENT` and unlike `DEFAULT_TIMEOUT_MS`: a
+ * garbage floor that quietly became the default 1 would be a fresh false-green
+ * vector — exactly the class of bug the floor exists to close. The upper bound
+ * is part of that rule, not a separate nicety: `99999999999999999999` passes a
+ * digits-only test and becomes `1e20`, a value the runtime cannot represent
+ * exactly, so pharos refuses a floor it cannot count to rather than gating on
+ * an approximation of one (limen refuses float-imprecise integrity math for the
+ * same reason). Such a floor is unmeetable and therefore fails closed either
+ * way — the point is that it is refused where it is stated, naming the value.
+ *
+ * Surrounding whitespace is trimmed before validation.
+ */
+export function parseMinScenariosValue(value: string, source: string): number {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new ConfigError([
+      `${source} must be a non-negative integer (got ${JSON.stringify(value)})`,
+    ]);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new ConfigError([
+      `${source} must be a non-negative integer no larger than ${Number.MAX_SAFE_INTEGER} ` +
+        `(Number.MAX_SAFE_INTEGER); a larger floor cannot be represented exactly ` +
+        `(got ${JSON.stringify(value)})`,
+    ]);
+  }
+  return parsed;
+}
+
 /** Parse a boolean-ish env value; returns undefined when unset/unrecognized. */
 function parseBool(value: string | undefined): boolean | undefined {
   if (value === undefined) return undefined;
@@ -59,17 +95,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ConfigOverride {
   }
 
   if (env.MIN_SCENARIOS !== undefined) {
-    const trimmed = env.MIN_SCENARIOS.trim();
-    // Fail closed, like PHAROS_ENVIRONMENT and unlike DEFAULT_TIMEOUT_MS: a
-    // garbage floor that quietly became the default 1 would be a fresh
-    // false-green vector — exactly the class of bug the floor exists to close.
-    if (!/^\d+$/.test(trimmed)) {
-      throw new ConfigError([
-        'MIN_SCENARIOS must be a non-negative integer ' +
-          `(got ${JSON.stringify(env.MIN_SCENARIOS)})`,
-      ]);
-    }
-    out.min_scenarios = Number(trimmed);
+    // Fail closed through the shared parser, so the env var and the
+    // `--min-scenarios` flag accept and refuse exactly the same values.
+    out.min_scenarios = parseMinScenariosValue(env.MIN_SCENARIOS, 'MIN_SCENARIOS');
   }
 
   const destructive = parseBool(env.ALLOW_DESTRUCTIVE_TESTS);

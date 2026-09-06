@@ -22,9 +22,9 @@ redacted — no secret reaches disk.
   "startedAt": "...", "finishedAt": "...", "durationMs": 0,
   "summary": {
     "total": 7, "passed": 6, "failed": 0, "skipped": 1,
-    "discovered": 8, "executed": 7, "filtered": 1, "parseFailed": 0, "refused": 0,
+    "discovered": 8, "executed": 6, "filtered": 1, "parseFailed": 0, "refused": 0,
     "narrowed": ["--exclude-tag jwt"],
-    "floor": { "minScenarios": 1, "executed": 7, "applied": 1, "met": true }
+    "floor": { "minScenarios": 1, "executed": 6, "applied": 1, "met": true }
   },
   "scenarios": [ { "scenarioId": "...", "pass": true, "steps": [ ... ] } ]
 }
@@ -38,7 +38,10 @@ results that never ran; `executed` is what actually ran — the floor's
 numerator. `narrowed` lists the explicit CLI narrowing in effect. `floor` is
 the run's [scenario-floor](#exit-codes) verdict. Every discovered file gets
 exactly one of these classifications, and `discovered` always equals their
-sum — a tool bug (not a bad run) if it doesn't.
+sum — a tool bug (not a bad run) if it doesn't. Above: `8 = 1 filtered + 0
+parseFailed + 0 refused + 1 skipped + 6 executed`. A safety-skipped scenario
+never ran, so it is *not* in `executed`; `total` (7) is every classification
+that produced a reported result — everything but the filtered one.
 
 The report deliberately omits the raw legacy/new responses; only the
 already-redacted comparison summary, mismatches, and diff text are included, so
@@ -93,7 +96,10 @@ Scenarios may be skipped (not failed) by a safety gate:
 
 A skipped scenario imposes no base-URL requirement, so a guarded scenario does
 not force config it never uses. A skip counts only under the `skipped`
-summary counter — never `passed` — and never fails the run by itself.
+summary counter — never `passed` — and never fails the run by itself. The one
+case where a skip still ends the run non-zero is a scenario named by
+`--scenario`: it executed nothing, so the run misses its floor and exits `20`
+(naming a scenario is the statement that it must run).
 
 ### `environment: production` is fail-closed
 

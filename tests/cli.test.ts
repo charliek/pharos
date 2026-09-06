@@ -5,6 +5,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildProgram } from '../src/cli/program';
+import { parseMinScenarios } from '../src/cli/util';
+import { ConfigError } from '../src/errors';
 import { replyJson, startTestServer, type TestServer } from './helpers/server';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +22,26 @@ describe('cli program', () => {
   it('reports its version', () => {
     const program = buildProgram();
     expect(program.version()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+});
+
+describe('--min-scenarios', () => {
+  it('refuses a floor it cannot represent exactly, at the boundary', () => {
+    // The flag and MIN_SCENARIOS are two spellings of one setting and go
+    // through one parser, so the boundary is pinned on both sides (the env
+    // side lives in config.test.ts). `9007199254740992` and 1e20 pass a
+    // digits-only test and then become numbers the runtime cannot count to.
+    expect(parseMinScenarios(undefined)).toBeUndefined();
+    expect(parseMinScenarios('9007199254740991')).toBe(Number.MAX_SAFE_INTEGER);
+    expect(() => parseMinScenarios('9007199254740992')).toThrow(ConfigError);
+    try {
+      parseMinScenarios('99999999999999999999');
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ConfigError).message).toContain('--min-scenarios');
+      expect((error as ConfigError).message).toContain('99999999999999999999');
+      expect((error as ConfigError).message).toContain(String(Number.MAX_SAFE_INTEGER));
+    }
   });
 });
 

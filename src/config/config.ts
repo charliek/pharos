@@ -142,7 +142,11 @@ const configFileSchema = z
     allow_destructive_tests: z.boolean().optional(),
     allow_production_guard_override: z.boolean().optional(),
     allow_recording_updates: z.boolean().optional(),
-    min_scenarios: z.number().int().nonnegative().optional(),
+    // `.safe()` as well as `.int()`: this zod's `.int()` is `Number.isInteger`,
+    // which accepts 1e20 — a floor the runtime cannot represent exactly. The two
+    // string-parsing entry points (MIN_SCENARIOS, --min-scenarios) reject that,
+    // and a config file must not be the one door left open.
+    min_scenarios: z.number().int().safe().nonnegative().optional(),
     redaction: redactionFileSchema.optional(),
   })
   .strict();
