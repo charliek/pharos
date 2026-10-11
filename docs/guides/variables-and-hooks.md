@@ -50,7 +50,7 @@ custom comparators, and custom normalizers. Scenarios reference them by name:
 export const hooks = {
   generateUserPayload: () => ({ email: `grace-${crypto.randomUUID()}@example.com` }),
   deleteUser: async (ctx, args) => {
-    /* best-effort cleanup using ctx.env base URLs */
+    /* best-effort cleanup against ctx.legacyBaseUrl / ctx.newBaseUrl */
   },
 };
 export const comparators = { compareDeviceList: (ctx) => [/* mismatches */] };
@@ -71,6 +71,14 @@ cleanup:
 A hook receives the scenario context (variables, env) and optional args, and may
 return a map that an `assign` mapping merges into the variables. Hooks run as:
 scenario **setup** → per-step **before**/**after** → scenario **cleanup**.
+
+The context (`HookContext`, exported from the package) carries `scenarioId`;
+`variables` (the live store — a hook may also write it directly); `env`;
+`legacyBaseUrl` and `newBaseUrl` (the resolved config values, for a hook that
+seeds or cleans up data itself); and `stepId`, set only for **before**/**after**
+hooks. Either base URL is undefined when it isn't configured, and a
+`new_only_assert` run does not require `legacy_base_url`, so a hook that needs
+one should throw a `HookError` when it is missing.
 
 **Cleanup always runs** — even after a step or a setup/before hook fails — so
 test data is not left behind. An unknown hook, or an `assign` that references a

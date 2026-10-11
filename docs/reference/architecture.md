@@ -22,6 +22,21 @@ uses a contract **or** inline rules, never both.
 
 ## Execution pipeline
 
+Scenarios in one `run` (or `record`) execute **one at a time, never
+concurrently**, in discovery order: files are sorted by path under
+`scenario_dir` with a plain string sort — not by scenario `id`, and not by tag.
+There is no concurrency option. Parse failures and safety-gated scenarios
+produce results without executing. The only concurrency is inside a
+`compare_live` step, whose legacy and new requests are issued together.
+
+On a shared datastore this means two scenarios in the same run never race each
+other, but a destructive scenario still runs before or after the list scenarios
+purely by file path, and nothing serializes it against other writers (a
+parallel CI job, a person, a second run). So each destructive scenario should
+create the rows it works on, touch only those, and delete them in `cleanup`.
+Stray rows don't by themselves break a list compared two-sided, since both
+sides read them; they do break a one-sided count or contents assertion.
+
 For each scenario (spec §3.3):
 
 1. Initialize the scenario context (variables + environment).
@@ -57,7 +72,10 @@ The modules mirror spec §3.5:
 
 Comparison is a pure function of the merged rules and the two responses — it has
 no dependency on scenarios, config, or the network, which keeps it easy to test.
-It normalizes both bodies, then applies the scenario's strategy. See
+For the two-sided strategies it normalizes both bodies, then compares;
+`explicit_expectations` asserts the response as received (redacted paths
+aside), and a `custom` comparator receives redacted, un-normalized views and
+normalizes itself if it needs to. See
 [comparison & contracts](../guides/comparison-and-contracts.md).
 
 ## Safety posture

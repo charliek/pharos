@@ -51,9 +51,15 @@ for the full field list.
 - **`explicit_expectations`** — compare the new response against literal values;
   redacted paths are still masked so a secret can't leak through an assertion.
 - **`custom`** — delegate to a named comparator; it receives **redacted** response
-  views so it cannot surface a secret into a report — `Set-Cookie` values are
-  masked in that view unconditionally, regardless of the scenario's
-  `sensitiveHeaders` config.
+  views: `redact_paths`, the sensitive headers and registered values are
+  masked, and `Set-Cookie` values are masked in that view unconditionally,
+  regardless of the scenario's `sensitiveHeaders` config. A secret elsewhere in
+  a body (a field no `redact_paths` covers, or a cookie value the body echoes)
+  is still in the view, so declare it in `redact_paths` or keep the comparator
+  from copying it into a mismatch. Its templated
+  `args` are not redacted by path,
+  so a value passed through them (a hook-captured legacy body, say) is the
+  comparator's to keep out of its mismatches.
 
 ## Redaction — no secret in any output
 
@@ -63,6 +69,13 @@ secrets are masked during normalization (so they never reach the diff); header
 names and query params are masked on every output surface; and the operator's
 `redaction.json_paths` augment the contract's `redact_paths` at run time. A test
 proves no configured secret reaches any artifact.
+
+The one gap is a `custom` comparator's own output. Its `args` are not redacted
+by path, so a comparator that copies an unregistered secret from them into a
+mismatch or summary has it rendered: keeping such values out is the
+comparator author's job. Registered sensitive values (sensitive extractions,
+the `{{ env.X }}` values `args` read) and sensitive header names are still
+masked in whatever it returns.
 
 ## Out of scope: streaming endpoints
 
