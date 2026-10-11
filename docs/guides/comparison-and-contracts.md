@@ -51,9 +51,12 @@ for the full field list.
 - **`explicit_expectations`** — compare the new response against literal values;
   redacted paths are still masked so a secret can't leak through an assertion.
 - **`custom`** — delegate to a named comparator; it receives **redacted** response
-  views, so nothing it reads from a response can surface a secret into a
-  report — `Set-Cookie` values are masked in that view unconditionally,
-  regardless of the scenario's `sensitiveHeaders` config. Its templated
+  views: `redact_paths`, the sensitive headers and registered values are
+  masked, and `Set-Cookie` values are masked in that view unconditionally,
+  regardless of the scenario's `sensitiveHeaders` config. A secret elsewhere in
+  a body (a field no `redact_paths` covers, or a cookie value the body echoes)
+  is still in the view, so declare it in `redact_paths` or keep the comparator
+  from copying it into a mismatch. Its templated
   `args` are not redacted by path,
   so a value passed through them (a hook-captured legacy body, say) is the
   comparator's to keep out of its mismatches.

@@ -14,9 +14,10 @@ On a failed comparison, Pharos also writes **redacted artifacts** under
 `report_dir/artifacts/<scenario-id>/<step-id>/`: `request.json`,
 `legacy-response.json`, `new-response.json`, and `diff.txt`. Every surface is
 redacted — no secret reaches disk. Artifacts are written only when the
-comparison itself fails: a step that fails any other way (a transport error,
-an unresolvable template, a failed extraction, a throwing `after` hook) gets
-none.
+comparison itself fails. A step that fails only another way (a transport
+error, an unresolvable template, a failed extraction, a throwing `after` hook)
+gets none. If the comparison fails and the `after` hook then throws too, the
+comparison's artifacts have already been written.
 
 ### Where a hook failure appears
 
