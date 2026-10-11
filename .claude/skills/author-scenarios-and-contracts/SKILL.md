@@ -138,7 +138,9 @@ compare:
 `set_cookie`, `set_cookie_absent`, `location`; at least one must assert something. Naming
 `set-cookie`/`cookie` in the header maps is a validation error — use `set_cookie` /
 `set_cookie_absent`, which read the lossless capture. Reach for `expect` on the auth state a
-flow depends on, on redirect targets, and always in `new_only_assert` (no second side exists).
+flow depends on and on redirect targets. In `new_only_assert` (no second side exists) every
+assertion is one-sided: `explicit_expectations` + `expect`, or a `custom` comparator — `expect`
+beside `custom` is a validation error.
 `expect` checks **new's** response only, in every mode — under `compare_live` legacy is called
 but never asserted.
 
