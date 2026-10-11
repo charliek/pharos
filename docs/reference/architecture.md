@@ -72,7 +72,10 @@ The modules mirror spec §3.5:
 
 Comparison is a pure function of the merged rules and the two responses — it has
 no dependency on scenarios, config, or the network, which keeps it easy to test.
-It normalizes both bodies, then applies the scenario's strategy. See
+For the two-sided strategies it normalizes both bodies, then compares;
+`explicit_expectations` asserts the response as received (redacted paths
+aside), and a `custom` comparator receives redacted, un-normalized views and
+normalizes itself if it needs to. See
 [comparison & contracts](../guides/comparison-and-contracts.md).
 
 ## Safety posture

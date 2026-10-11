@@ -139,11 +139,12 @@ compare:
 `set-cookie`/`cookie` in the header maps is a validation error — use `set_cookie` /
 `set_cookie_absent`, which read the lossless capture. Reach for `expect` on the auth state a
 flow depends on, on redirect targets, and always in `new_only_assert` (no second side exists).
+`expect` checks **new's** response only, in every mode — under `compare_live` legacy is called
+but never asserted.
 
-Reading an `expect` failure's diff: the report reuses the two-sided renderer, so its
-`legacy:` column holds your **expected** value and `new:` holds the **actual** response —
-it is not a legacy-vs-new drift. Check the step's saved response artifacts under `reports/`
-before chasing one.
+Reading an `expect` failure's diff: it says `expected:` (your value) and `actual:` (new's
+response) — not a legacy-vs-new drift. Under `compare_live` the step's artifacts under
+`reports/` also hold legacy's response, a quick check of whether legacy meets the pin.
 
 A `[*]` path in `expect.body.json_paths` compares as a single value when it matches one value
 and as an array when it matches several (an item lacking the field matches nothing), so it is
@@ -158,13 +159,22 @@ either: both sides read the same row, so it can pass when the wrong thing was st
 one-sidedly to legacy-derived expectations (`new_only_assert` + `explicit_expectations`, values
 taken from the legacy handler or a probe of legacy), or compare paired resources (a `setup` hook
 writes through `ctx.legacyBaseUrl` and `assign`s the result; the steps write through new and pin
-to those variables). Expectations see the redacted response — never pin a redacted path.
+to those variables, or hand the whole legacy body to a `custom` comparator through templated
+`compare.args`). Expectations see the redacted response — never pin a redacted path; a
+comparator's `args` are not redacted, so it must skip redacted paths itself.
+
+Rehearse before trusting pins: run once with `NEW_BASE_URL` set to legacy's URL (literal,
+non-empty — an empty one is ignored) and `ALLOW_DESTRUCTIVE_TESTS=true`, excluding
+intentional-change scenarios; every executed read and pin should pass (check `skipped`), and
+destructive scenarios really write to legacy
+([guides/scenarios#multi-step-flows-and-writes](https://charliek.github.io/pharos/guides/scenarios/#multi-step-flows-and-writes)).
 
 Cover each field a write accepts — set, change, clear (explicit `null`, where nullable), omit —
 and each validation rule, from the legacy handler. A scenario stops at its first failed step, so
 keep one divergence per scenario; scenarios run one at a time in file-path order, so a
 destructive one should create, touch and clean up only its own rows.
 [guides/scenarios#multi-step-flows-and-writes](https://charliek.github.io/pharos/guides/scenarios/#multi-step-flows-and-writes) ·
+[guides/scenarios#comparing-a-whole-body](https://charliek.github.io/pharos/guides/scenarios/#comparing-a-whole-body) ·
 [reference/architecture#execution-pipeline](https://charliek.github.io/pharos/reference/architecture/#execution-pipeline).
 
 ## Safety gates

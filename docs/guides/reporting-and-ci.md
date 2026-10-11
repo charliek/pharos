@@ -13,7 +13,29 @@ A `run` produces three things:
 On a failed comparison, Pharos also writes **redacted artifacts** under
 `report_dir/artifacts/<scenario-id>/<step-id>/`: `request.json`,
 `legacy-response.json`, `new-response.json`, and `diff.txt`. Every surface is
-redacted — no secret reaches disk.
+redacted — no secret reaches disk. Artifacts are written only when the
+comparison itself fails: a step that fails any other way (a transport error,
+an unresolvable template, a failed extraction, a throwing `after` hook) gets
+none.
+
+### Where a hook failure appears
+
+A `setup`, `before` or `cleanup` hook that throws fails the **scenario**: its
+message becomes the scenario's `error` (prefixed `cleanup:` for a cleanup
+hook), which the console prints under the `✗` line and `report.json` and
+`junit.xml` both carry. A setup failure stops the scenario before any step, a
+before failure before its own step; cleanup still runs.
+
+An `after` hook that throws fails its **step** instead, and is easy to miss.
+The step's `error` becomes `after hook: <message>` (masked like every other
+output) in `report.json`, at `scenarios[i].steps[j].error`. But the console and
+the JUnit failure text print a failed step's comparison summary in preference
+to its `error`, so a step whose comparison passed reads
+`step '<id>': match (<strategy>)` under a `✗` scenario. When a failed scenario shows only matching steps, read
+`steps[].error` in `report.json`. If the step had already failed with an
+execution error, that error is kept and the after hook's is not recorded.
+Printing the step `error` on the console is tracked in
+[pharos#22](https://github.com/charliek/pharos/issues/22).
 
 ## Run report
 

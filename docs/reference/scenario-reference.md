@@ -154,6 +154,18 @@ independent of any `set_cookie` block's consumption on the same step. A
 relative `Location` is resolved against the request URL before its parts are
 asserted. Cookie values are never rendered into a failure, expected or actual.
 
+`expect` asserts against the **new** service's response only, in every mode.
+Under `compare_live` legacy is still called and its response still feeds
+`legacy.*` extractions and the failure artifacts (a legacy transport error
+still fails the step), but no expectation is checked against it: legacy's
+status and body are never asserted directly. They can still decide the step
+indirectly — a value extracted from `legacy.*` and templated into an
+expectation is whatever legacy returned, error body included. Under
+`replay_against_recording` the recording is likewise never asserted. A failure
+renders as `expected:` (your value) / `actual:` (new's). To check that a pin
+holds for legacy, rehearse the suite with new's base URL pointed at legacy —
+see [writing scenarios](../guides/scenarios.md#multi-step-flows-and-writes).
+
 Every string value inside `expect` — `headers`, `header_absent`,
 `header_present`, `body.json_paths`, `set_cookie` (`name`/`value`/`attributes`),
 `set_cookie_absent`, and `location` — is substituted with the same

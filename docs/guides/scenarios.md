@@ -93,12 +93,14 @@ expectations, or compare paired resources:
 - **Compare paired resources.** When legacy's result is easier to observe than
   to derive, a `setup` hook makes the same write through legacy
   (`ctx.legacyBaseUrl`) on a resource of its own, reads it back, and `assign`s
-  the fields that matter. The steps then make the write through new on a second
-  resource and pin its read-back to those variables. Leave out ids and server
-  timestamps, which differ by construction. Templated expectations compare
-  field by field. A `custom` comparator gets no variable substitution or
-  scenario context (its `args` arrive raw), so a whole-body paired diff needs a
-  comparator that shares state with the setup hook in the same hooks module.
+  what it read. The steps then make the write through new on a second
+  resource and compare its read-back with those variables. Leave out ids and
+  server timestamps, which differ by construction. Templated expectations
+  compare path by path; a whole-string template can also pin a whole
+  sub-object, by deep equality and with no normalization. For a whole-body
+  comparison, `assign` the entire legacy read-back to one variable and hand it
+  to a `custom` comparator through `compare.args`, which is templated like
+  `expect` — see [comparing a whole body](#comparing-a-whole-body) below.
 
 ```yaml
 version: 1
@@ -159,6 +161,41 @@ legacy's status and error body. Seed the set, change and clear cases so the
 expected post-state differs from the starting one — otherwise a write that does
 nothing passes.
 
+**Rehearse against legacy.** Before trusting hand-pinned expectations, run the
+suite once with new's base URL pointed at legacy (the environment variable
+overrides the config file, and nothing rejects equal base URLs), reporting
+somewhere other than the real run's `report_dir`:
+
+```bash
+NEW_BASE_URL=http://legacy.internal ALLOW_DESTRUCTIVE_TESTS=true \
+  REPORT_DIR=reports/rehearsal bun run ftest -- run --exclude-tag intentional-change
+```
+
+Write legacy's URL out, non-empty: an empty `NEW_BASE_URL` (an unset
+`$LEGACY_BASE_URL`, say) is ignored, so new's configured URL stays in force and
+the "rehearsal" quietly calls new. The destructive opt-in is what runs the
+write pins at all; without it they are skipped, and skips can still exit 0, so
+check the summary's `skipped` count. And leave out the `new_only_assert`
+scenarios that pin intentional changes or net-new behaviour (here by the
+`intentional-change` tag): they are expected to fail against legacy.
+
+Every other one-sided pin (`new_only_assert`, or an `expect` inside
+`compare_live`) then runs against legacy and must pass, which shows the pins
+encode what legacy actually does — so a later failure against new is new's
+divergence, not a wrong pin. Every two-sided read becomes legacy
+against itself and should pass too; one that fails has found non-determinism
+the contract does not ignore yet (a request id, a server timestamp), not a
+migration difference. A paired scenario pairs two legacy writes, and a replay
+compares legacy with its own recording. A green rehearsal proves the pins are
+true of legacy, not that they are strong enough to catch a divergence; the
+seeding rule above covers that. The write scenarios really write to legacy's
+store (on a shared store, the same store new writes to), so rehearse only
+against a legacy you may write to. A
+`new_only_assert` write reaches legacy once; a write step under `compare_live`
+is sent to legacy twice, concurrently, so expect duplicate rows, or a spurious
+mismatch where legacy rejects the second copy. Hooks see legacy's URL as
+`ctx.newBaseUrl` too.
+
 Mark write scenarios `destructive`, set the `safety` block, and add `cleanup`
 hooks. The example `users.create-then-fetch-destructive` shows that wiring
 (`safety`, a `setup` hook, `extract`, `cleanup`), but its POST runs under
@@ -167,3 +204,45 @@ that is harmless — each keeps its own store, and the create is an upsert keyed
 on the email — but against a shared store with server-generated ids the same
 scenario performs the write twice, and no comparison is guaranteed to fail when
 it does. Copy its wiring, not its write step.
+
+### Comparing a whole body
+
+To compare new's whole read-back with legacy's, the `setup` hook returns the
+legacy read-back body and `assign`s it to one variable, and the read-back step
+hands that variable to a `custom` comparator from your hooks module:
+
+```yaml
+mode: new_only_assert                # plus safety and cleanup, as above
+setup:
+  hooks:
+    - name: createUserViaLegacy      # POSTs through ctx.legacyBaseUrl, GETs it back,
+      args: { nickname: Ada }        # and returns { user: <the read-back body> }
+      assign: { legacyUser: user }
+steps:
+  # ...the same write through new, extracting newUserId...
+  - id: read-back
+    request: { method: GET, path: "/users/{{ variables.newUserId }}" }
+    compare:
+      strategy: custom
+      comparator: matchesExpected
+      args:
+        expected: "{{ variables.legacyUser }}"   # whole-string: stays an object
+        skip: [$.id, $.createdAt]                # differ by construction
+```
+
+Under `new_only_assert` the comparator is called with `{ legacy, candidate,
+rules, args }`: `legacy` is undefined, `candidate` is new's read-back, `rules`
+is the step's comparison rules, and `args` is the substituted block — so
+`args.expected` is the legacy body itself. It returns a list of mismatches
+(`path`, `kind`, `expected`, `actual`, `message`), which the report renders as
+`expected:` / `actual:`. Pharos normalizes nothing before the call, so the
+comparator applies its own skips (`args.skip` here; `rules.json.ignore_paths`
+is there too). Redaction is lopsided: `candidate` arrives masked at every path
+in `rules.json.redact_paths` (the contract's plus the config's
+`redaction.json_paths`), but `args` is not masked, so the legacy body still
+holds those values. Skip every redacted path on both sides, and never copy a
+redacted path's value into a mismatch: Pharos masks a comparator's mismatches
+only for registered sensitive values and sensitive header names, never by JSON
+path. See
+[`compare.args`](../reference/scenario-reference.md#comparison-strategies) for
+the substitution rules.
