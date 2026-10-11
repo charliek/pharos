@@ -29,6 +29,20 @@ Configuration is layered, each source overriding the previous:
 | `min_scenarios` | `MIN_SCENARIOS` | `1` | The run's scenario floor (spec Section 11.5, mirrors limen's `min_comparisons`): how many scenarios must actually *execute* for `run`/`record` to exit 0 or 1 rather than 20. `0` is accepted but inert — executing nothing is always a failure, so a floor of `0` and a floor of `1` accept identical inputs. **Unlike every other env var on this page, an empty, negative, fractional, non-numeric, or larger-than-`Number.MAX_SAFE_INTEGER` `MIN_SCENARIOS` is a hard `ConfigError`, not silently ignored** — a floor that silently defaulted would be a fresh false-green vector. See [reporting & CI](../guides/reporting-and-ci.md#exit-codes). |
 | `redaction` | — | see below | Header names, JSON paths, and query params to mask in output. |
 
+!!! warning "Relative paths resolve against the working directory"
+    The `-c` path, the directory defaults above, and any relative
+    `scenario_dir`, `contract_dir`, `fixture_dir`, `report_dir` or
+    `hooks_module` in a config file resolve against the process's current
+    working directory — **not** the config file's directory. (A scenario's
+    `contract` reference is different: it resolves against the scenario file.)
+    `bun run ftest` in the pharos checkout always runs with the checkout as its
+    working directory, so pointing it at another project's config with
+    relative directories silently validates and runs pharos's own example
+    `scenarios/` with its `hooks/index.ts`, and writes `reports/` into the
+    checkout. Run from the consuming project's root (a scaffolded suite's
+    `bun run conformance`, or `bun <pharos-checkout>/src/cli/index.ts run`), or
+    use absolute paths.
+
 ## Example config file
 
 ```json

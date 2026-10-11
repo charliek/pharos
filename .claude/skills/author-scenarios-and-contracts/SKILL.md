@@ -32,6 +32,11 @@ bun run ftest -- record                      # -s <id> narrows; legacy_record sc
 bun run ftest -- init ../some-repo/conformance --service my-service
 ```
 
+Relative directories in a config resolve against the working directory, not the config file's
+directory, and `bun run ftest` runs from the checkout — so another project's `-c` config with
+`./scenarios` reads pharos's own examples. Use absolute directories or run from the consuming
+project's root: [reference/configuration](https://charliek.github.io/pharos/reference/configuration/).
+
 From a **consuming repo** scaffolded by `init` (run from the scaffold root — config and every
 directory in it resolve against the cwd):
 
@@ -140,6 +145,28 @@ Reading an `expect` failure's diff: the report reuses the two-sided renderer, so
 it is not a legacy-vs-new drift. Check the step's saved response artifacts under `reports/`
 before chasing one.
 
+A `[*]` path in `expect.body.json_paths` compares as a single value when it matches one value
+and as an array when it matches several (an item lacking the field matches nothing), so it is
+no count or every-item check — pin `[*]` only where the data fixes the match count; an absent
+path always fails, so `json_paths` cannot assert absence.
+
+## Writes on a shared store
+
+A write step under `compare_live` runs on **both** services, so on a shared store it happens
+twice — and a two-sided read-back after a new-side write can't establish the write was right
+either: both sides read the same row, so it can pass when the wrong thing was stored. Pin
+one-sidedly to legacy-derived expectations (`new_only_assert` + `explicit_expectations`, values
+taken from the legacy handler or a probe of legacy), or compare paired resources (a `setup` hook
+writes through `ctx.legacyBaseUrl` and `assign`s the result; the steps write through new and pin
+to those variables). Expectations see the redacted response — never pin a redacted path.
+
+Cover each field a write accepts — set, change, clear (explicit `null`, where nullable), omit —
+and each validation rule, from the legacy handler. A scenario stops at its first failed step, so
+keep one divergence per scenario; scenarios run one at a time in file-path order, so a
+destructive one should create, touch and clean up only its own rows.
+[guides/scenarios#multi-step-flows-and-writes](https://charliek.github.io/pharos/guides/scenarios/#multi-step-flows-and-writes) ·
+[reference/architecture#execution-pipeline](https://charliek.github.io/pharos/reference/architecture/#execution-pipeline).
+
 ## Safety gates
 
 - `safety.destructive: true` on any scenario that writes or deletes; it runs only with
@@ -198,7 +225,11 @@ sides.
   two-sided via the contract's `location.origin: ignore`, then asserted one-sided with
   `expect.location.path`.
 - `scenarios/users/create-then-fetch-destructive.yaml` — `safety.destructive`, hooks,
-  `extract`, `subset`. `contracts/user-service.contract.yaml` — every rule above, with reasons.
+  `extract`, `subset`. Copy the wiring, not the write: its POST runs under `compare_live`, so
+  it writes through both services — harmless against the example mocks (separate stores, an
+  upsert keyed on email), but a doubled write against a shared store with server-generated
+  ids, and not one a comparison is guaranteed to catch. Use the write patterns above.
+- `contracts/user-service.contract.yaml` — every rule above, with reasons.
 
 Finish by running `validate`, `check-contract` on any contract you touched, and `run` against
 the mocks or the real pair. Inside the pharos repo the gate is `bun run check` (typecheck,

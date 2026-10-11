@@ -177,6 +177,20 @@ as sensitive, like a sensitive extraction, so a comparator that echoes it into a
 error or a mismatch has it masked (`[REDACTED:env.X]`) in the console, JSON and
 JUnit reports and in failure artifacts.
 
+`body.json_paths` asserts against the response as received — no normalization
+beyond masking `redact_paths` and the config's `redaction.json_paths`, so a
+pinned path either one covers compares against the mask. A `[*]` path that
+matches **one** value is compared as that single value; one that matches
+**several** is compared as an array in response order. An element without the
+field matches nothing. So
+`$.items[*].status: ACTIVE` passes while exactly one item carries a `status`
+(`{"items":[{"status":"ACTIVE"},{}]}` passes) and fails once a second matching
+value appears, and an expected one-element array (`[ACTIVE]`) never matches a
+scalar field. It is neither a count of items nor a check that every item has
+the field: use `[*]` only where controlled data fixes the match count. A path
+that matches nothing fails as missing, so `json_paths` cannot assert that a
+field is absent.
+
 The behavioral vocabulary under `compare.body` (ignore_paths, redact_paths,
 sort_arrays, unordered_arrays, normalize_timestamps, enum_aliases) plus
 `compare.set_cookie` / `compare.location` is the **inline fallback** — using any
