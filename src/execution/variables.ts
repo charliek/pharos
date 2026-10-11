@@ -123,6 +123,40 @@ export function substituteValue(value: unknown, ctx: VariableContext): unknown {
   return value;
 }
 
+/**
+ * The names of the environment variables referenced, as `{{ env.NAME }}`, by any
+ * string leaf of `value` (nested objects and arrays included; whole and embedded
+ * templates alike). Mirrors {@link substituteString}'s own whole-vs-embedded
+ * split so it names exactly what substitution would have read. Lets a caller
+ * that substituted `value` register the env-sourced values as sensitive, since
+ * `resolveExpression` returns an env value without recording where it came from.
+ * Duplicates are collapsed; order is first-reference order.
+ */
+export function referencedEnvNames(value: unknown): string[] {
+  const names = new Set<string>();
+  const addFrom = (expr: string): void => {
+    const trimmed = expr.trim();
+    const dot = trimmed.indexOf('.');
+    if (dot !== -1 && trimmed.slice(0, dot) === 'env') names.add(trimmed.slice(dot + 1));
+  };
+  const visit = (node: unknown): void => {
+    if (typeof node === 'string') {
+      const whole = WHOLE_TEMPLATE.exec(node);
+      if (whole) {
+        addFrom(whole[1]);
+        return;
+      }
+      for (const match of node.matchAll(EMBEDDED_TEMPLATE)) addFrom(match[1]);
+    } else if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+    } else if (node !== null && typeof node === 'object') {
+      for (const item of Object.values(node)) visit(item);
+    }
+  };
+  visit(value);
+  return [...names];
+}
+
 /** Resolve a string template to a string (coercing a whole-template result). */
 export function substituteText(text: string, ctx: VariableContext): string {
   const value = substituteString(text, ctx);

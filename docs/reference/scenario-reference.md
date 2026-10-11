@@ -133,7 +133,7 @@ compare:
       query_present: [return_to]
       query_absent: [client_secret]
   comparator: compareDeviceList      # custom (named hook)
-  args: { ignore_offline_timestamp: true }
+  args: { ignore_offline_timestamp: true }   # templated like expect (see below)
 ```
 
 `explicit_expectations` must assert at least one of `expect.status`,
@@ -162,6 +162,20 @@ step's own extraction. `expect.status` is the one exception and is never
 templated. A whole-string template preserves the resolved value's type, so a
 templated `body.json_paths` value or cookie `attributes` entry need not be a
 string.
+
+`compare.args` (the value handed to a `custom` comparator) is substituted the same
+way: every string anywhere inside it, nested objects and arrays included, goes
+through the `{{ variables.x }}` / `{{ env.X }}` engine, evaluated after the
+step's own extraction. A comparator can therefore receive a server-generated
+value — an id extracted from an earlier step, a minted cursor. A whole-string
+template keeps the resolved value's type; numbers, booleans, `null` and
+template-free strings pass through unchanged. A template that cannot resolve
+fails the step with an error naming `compare.args`. Only `strategy: custom`
+reads `args`, so on any other strategy it is left exactly as written and is
+never substituted. Each `{{ env.X }}` value an `args` block reads is registered
+as sensitive, like a sensitive extraction, so a comparator that echoes it into an
+error or a mismatch has it masked (`[REDACTED:env.X]`) in the console, JSON and
+JUnit reports and in failure artifacts.
 
 The behavioral vocabulary under `compare.body` (ignore_paths, redact_paths,
 sort_arrays, unordered_arrays, normalize_timestamps, enum_aliases) plus

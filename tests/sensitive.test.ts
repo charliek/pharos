@@ -728,6 +728,77 @@ steps:
   });
 });
 
+describe('sensitivity propagation — env values in custom comparator args', () => {
+  const ENV_SECRET = 'ENV-SECRET-TOKEN-VALUE';
+
+  function envComparatorScenario(id: string, args: string) {
+    return loadScenarioFromText(
+      `version: 1
+id: ${id}
+name: ${id}
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: use
+    request: { method: GET, path: /echo }
+    compare:
+      strategy: custom
+      comparator: echo
+      args: ${args}
+`,
+      'test.yaml',
+    );
+  }
+
+  it('masks an env value a comparator echoes into its own error', async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    const scenario = envComparatorScenario('env.throw', '{ token: "{{ env.SECRET }}" }');
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      env: { SECRET: ENV_SECRET },
+      comparators: {
+        echo: (ctx) => {
+          throw new Error(`bad token: ${(ctx.args as { token: string }).token}`);
+        },
+      },
+    });
+    expect(result.pass).toBe(false);
+    // The comparator threw, so the failure surfaces as the scenario's error —
+    // the string the console, JSON and JUnit reporters all print verbatim.
+    expect(result.error).toContain('bad token: [REDACTED:env.SECRET]');
+    expect(JSON.stringify(result)).not.toContain(ENV_SECRET);
+  });
+
+  it('masks an env value (embedded in a string, nested) a comparator returns as a mismatch', async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { ok: true }));
+    const scenario = envComparatorScenario(
+      'env.mismatch',
+      '{ auth: { header: "Bearer {{ env.SECRET }}" } }',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      env: { SECRET: ENV_SECRET },
+      comparators: {
+        echo: (ctx) => [
+          {
+            path: '$.auth',
+            kind: 'custom',
+            expected: (ctx.args as { auth: { header: string } }).auth.header,
+            actual: 'nothing',
+            message: 'differs',
+          },
+        ],
+      },
+    });
+    expect(result.pass).toBe(false);
+    const comparison = JSON.stringify(result.steps[0].comparison);
+    expect(comparison).not.toContain(ENV_SECRET);
+    expect(comparison).toContain('Bearer [REDACTED:env.SECRET]');
+    const artifacts = readArtifacts('env.mismatch', 'use');
+    expect(artifacts).not.toContain(ENV_SECRET);
+    expect(artifacts).toContain('[REDACTED:env.SECRET]');
+  });
+});
+
 describe('sensitivity propagation — execution errors', () => {
   it('masks a secret carried in the URL of a timeout error', async () => {
     let pending: ServerResponse | undefined;

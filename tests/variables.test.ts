@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HttpResponseRecord } from '../src/execution/http-client';
 import {
   extractValue,
+  referencedEnvNames,
   substituteText,
   substituteValue,
   type VariableContext,
@@ -12,6 +13,33 @@ const ctx: VariableContext = {
   variables: { userId: 'u1', payload: { a: 1, b: [2, 3] } },
   env: { AUTH_TOKEN: 'tok' } as NodeJS.ProcessEnv,
 };
+
+describe('referencedEnvNames', () => {
+  it('names env variables in whole, embedded, nested and array templates, once each', () => {
+    expect(
+      referencedEnvNames({
+        whole: '{{ env.A }}',
+        embedded: 'Bearer {{ env.B }}/{{env.C}}',
+        nested: { list: ['{{ env.A }}', 7, null, { deep: ' {{  env.D  }} ' }] },
+      }),
+    ).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('ignores other namespaces, non-string leaves and template-free strings', () => {
+    expect(
+      referencedEnvNames({
+        v: '{{ variables.env }}',
+        r: '{{ random.uuid }}',
+        n: 1,
+        b: true,
+        z: null,
+        plain: 'env.A',
+      }),
+    ).toEqual([]);
+    expect(referencedEnvNames(undefined)).toEqual([]);
+    expect(referencedEnvNames('{{ env.X }}')).toEqual(['X']);
+  });
+});
 
 describe('substitution', () => {
   it('substitutes an embedded variable into a string', () => {
