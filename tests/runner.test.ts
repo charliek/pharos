@@ -876,6 +876,229 @@ steps:
   });
 });
 
+describe('runScenario — templated custom comparator args', () => {
+  it('hands the comparator args with {{ variables.x }} substituted, nested ones included', async () => {
+    newServer = await startTestServer((_r, res) =>
+      replyJson(res, 200, { id: 'user-42', count: 3 }),
+    );
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: cmp.templated-args
+name: templated args
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: create
+    request: { method: GET, path: /me }
+    extract:
+      userId: { from: response.body, path: $.id }
+      count: { from: response.body, path: $.count }
+    compare: { strategy: explicit_expectations, expect: { status: 200 } }
+  - id: check
+    request: { method: GET, path: /me }
+    compare:
+      strategy: custom
+      comparator: peek
+      args:
+        userId: "{{ variables.userId }}"
+        label: "user-{{ variables.userId }}!"
+        limit: "{{ variables.count }}"
+        nested:
+          ids: ["{{ variables.userId }}", "static"]
+          deeper: { owner: "{{ variables.userId }}" }
+`,
+      'test.yaml',
+    );
+    let seen: unknown = 'comparator was never called';
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      comparators: {
+        peek: (ctx) => {
+          seen = ctx.args;
+          return [];
+        },
+      },
+    });
+    expect(result.pass).toBe(true);
+    expect(seen).toEqual({
+      userId: 'user-42',
+      label: 'user-user-42!',
+      // A whole-string template keeps the resolved value's type, as it does for expect.
+      limit: 3,
+      nested: { ids: ['user-42', 'static'], deeper: { owner: 'user-42' } },
+    });
+  });
+
+  it("resolves a variable the same step's own extraction just captured", async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, { id: 'user-7' }));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: cmp.same-step-args
+name: same step args
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: check
+    request: { method: GET, path: /me }
+    extract:
+      userId: { from: response.body, path: $.id }
+    compare:
+      strategy: custom
+      comparator: peek
+      args: { userId: "{{ variables.userId }}" }
+`,
+      'test.yaml',
+    );
+    let seen: unknown;
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      comparators: {
+        peek: (ctx) => {
+          seen = ctx.args;
+          return [];
+        },
+      },
+    });
+    expect(result.pass).toBe(true);
+    expect(seen).toEqual({ userId: 'user-7' });
+  });
+
+  it('passes non-string args (numbers, booleans, null, template-free objects) through unchanged', async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: cmp.literal-args
+name: literal args
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: check
+    request: { method: GET, path: /me }
+    compare:
+      strategy: custom
+      comparator: peek
+      args:
+        count: 3
+        ratio: 0.5
+        enabled: true
+        disabled: false
+        nothing: null
+        plain: no templates here
+        nested: { list: [1, null, false, "x"], inner: { deep: [{ n: 0 }] } }
+`,
+      'test.yaml',
+    );
+    let seen: unknown;
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      comparators: {
+        peek: (ctx) => {
+          seen = ctx.args;
+          return [];
+        },
+      },
+    });
+    expect(result.pass).toBe(true);
+    expect(seen).toEqual({
+      count: 3,
+      ratio: 0.5,
+      enabled: true,
+      disabled: false,
+      nothing: null,
+      plain: 'no templates here',
+      nested: { list: [1, null, false, 'x'], inner: { deep: [{ n: 0 }] } },
+    });
+  });
+
+  it('hands the comparator undefined when the step declares no args', async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: cmp.no-args
+name: no args
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: check
+    request: { method: GET, path: /me }
+    compare: { strategy: custom, comparator: peek }
+`,
+      'test.yaml',
+    );
+    let seen: unknown = 'comparator was never called';
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      comparators: {
+        peek: (ctx) => {
+          seen = ctx.args;
+          return [];
+        },
+      },
+    });
+    expect(result.pass).toBe(true);
+    expect(seen).toBeUndefined();
+  });
+
+  it('fails the step, naming compare.args and the variable, when an arg references an undefined variable', async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: cmp.undefined-arg
+name: undefined arg
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: check
+    request: { method: GET, path: /me }
+    compare:
+      strategy: custom
+      comparator: peek
+      args: { nested: { id: "{{ variables.nope }}" } }
+`,
+      'test.yaml',
+    );
+    let called = false;
+    const result = await runScenario(scenario, 'test.yaml', config(), registry, {
+      comparators: {
+        peek: () => {
+          called = true;
+          return [];
+        },
+      },
+    });
+    expect(result.pass).toBe(false);
+    expect(result.steps[0].error).toContain("step 'check'");
+    expect(result.steps[0].error).toContain('compare.args');
+    expect(result.steps[0].error).toContain("variable 'nope' is not defined");
+    expect(called).toBe(false);
+  });
+
+  it('leaves args untouched on a non-custom strategy, so an unused unresolvable template still passes', async () => {
+    newServer = await startTestServer((_r, res) => replyJson(res, 200, {}));
+    const scenario = loadScenarioFromText(
+      `version: 1
+id: cmp.unused-args
+name: unused args
+service: s
+tags: [smoke]
+mode: new_only_assert
+steps:
+  - id: check
+    request: { method: GET, path: /me }
+    compare:
+      strategy: explicit_expectations
+      expect: { status: 200 }
+      args: { unused: "{{ variables.nope }}" }
+`,
+      'test.yaml',
+    );
+    const result = await runScenario(scenario, 'test.yaml', config(), registry);
+    expect(result.steps[0].error).toBeUndefined();
+    expect(result.pass).toBe(true);
+  });
+});
+
 describe('runScenario — manual redirect chain', () => {
   it('walks a 30x hop by hop, replaying the Location and a captured cookie', async () => {
     newServer = await startTestServer((req, res) => {

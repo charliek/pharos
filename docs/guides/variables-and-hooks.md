@@ -3,7 +3,7 @@
 ## Variables
 
 Templates `{{ namespace.key }}` are resolved in `path`, `query`, `headers`, and
-`body`:
+`body`, plus the string values of a step's `compare.expect` and, on a `custom` step, `compare.args`:
 
 ```
 {{ variables.userId }}   {{ env.AUTH_TOKEN }}

@@ -36,6 +36,7 @@ import {
 import {
   extractValue,
   isSensitiveExtract,
+  referencedEnvNames,
   substituteText,
   substituteValue,
   type VariableContext,
@@ -536,6 +537,34 @@ async function executeStep(
     throw error;
   }
 
+  // A custom comparator's `args` are templated the same way, so a comparator can
+  // be handed a server-generated value (an extracted id, a minted cursor). A
+  // whole-string template keeps its resolved type; non-string leaves pass through.
+  // Only `custom` reads args (compare.ts), so any other strategy keeps its args
+  // untouched — a stale, unresolvable template there must not fail the step.
+  let comparatorArgs: unknown = step.compare.args;
+  if (step.compare.strategy === 'custom' && step.compare.args !== undefined) {
+    try {
+      comparatorArgs = substituteValue(step.compare.args, ctx);
+    } catch (error) {
+      if (error instanceof VariableError)
+        return executionFailure(
+          step,
+          `step '${step.id}': compare.args: ${error.message}`,
+          legacy,
+          candidate,
+        );
+      throw error;
+    }
+    // An env value resolves without any record of where it came from, so register
+    // each one the args read: a comparator is free to echo its args into an error
+    // or a mismatch, and every output boundary masks through this registry.
+    for (const name of referencedEnvNames(step.compare.args)) {
+      const value = ctx.env[name];
+      if (value !== undefined) ctx.sensitive?.register(`env.${name}`, value);
+    }
+  }
+
   const request: CompareRequest = {
     strategy: step.compare.strategy,
     rules: withConfiguredRedaction(scenarioRules ?? inlineComparisonRules(step.compare), config),
@@ -545,7 +574,7 @@ async function executeStep(
     requireMatchingPaths: step.compare.body?.require_matching_paths,
     expect,
     comparator,
-    comparatorArgs: step.compare.args,
+    comparatorArgs,
     sensitiveHeaders: config.redaction.headers,
     sensitiveQueryParams: config.redaction.query_params,
     sensitive: ctx.sensitive,
