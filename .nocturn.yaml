@@ -1,0 +1,10 @@
+version: 1
+# Pharos ships nothing of its own: no tags, no npm publish. It is a black-box
+# test suite that other repos' conformance suites pin by commit
+# (github:charliek/pharos#<sha>), where their lockfiles give it role test.
+lockfiles:
+  # The test tool itself (commander, yaml, zod, fast-glob) and its dev tools.
+  bun.lock: { role: test }
+  # pyproject.toml has only the docs group (zensical and the docs theme): it
+  # builds the documentation site.
+  uv.lock: { role: build-tool }
